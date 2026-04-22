@@ -303,6 +303,17 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isDesktop) return;
+    if (window.location.pathname !== '/acesso-admin') return;
+
+    setAdminAccessPassword('');
+    setIsAdminAccessModalOpen(true);
+
+    // Clean the URL after opening the hidden admin access.
+    window.history.replaceState({}, '', '/');
+  }, [isDesktop]);
+
+  useEffect(() => {
     return () => {
       if (adminTapTimeoutRef.current) {
         window.clearTimeout(adminTapTimeoutRef.current);

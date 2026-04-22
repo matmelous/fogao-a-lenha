@@ -44,6 +44,7 @@ const generateId = () => {
 
 function App() {
   const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
+  const normalizedAdminPassword = typeof adminPassword === 'string' ? adminPassword.trim() : '';
   const adminApiToken = import.meta.env.VITE_ADMIN_API_TOKEN;
 
   // Version check for updates
@@ -244,11 +245,12 @@ function App() {
 
   const handleAdminAccessSubmit = (event: { preventDefault: () => void }) => {
     event.preventDefault();
-    if (!adminPassword) {
+    if (!normalizedAdminPassword) {
       alert('Senha de admin nao configurada. Defina VITE_ADMIN_PASSWORD no ambiente.');
       return;
     }
-    if (adminAccessPassword === adminPassword) {
+    const typedPassword = adminAccessPassword.trim();
+    if (typedPassword === normalizedAdminPassword) {
       setIsAdminAuthenticated(true);
       setIsAdminOpen(true);
       setIsAdminAccessModalOpen(false);

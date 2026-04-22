@@ -43,6 +43,9 @@ const generateId = () => {
 };
 
 function App() {
+  const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
+  const adminApiToken = import.meta.env.VITE_ADMIN_API_TOKEN;
+
   // Version check for updates
   useEffect(() => {
     const APP_VERSION = '2.1.0';
@@ -179,7 +182,6 @@ function App() {
   
   // Admin authentication - only you have access
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
-  const ADMIN_PASSWORD = 'admin2026@#'; // Change this to your desired password
   
   // Auto-update restaurant name if it's the old one
   useEffect(() => {
@@ -230,19 +232,15 @@ function App() {
     }
   }, []);
   
-  useEffect(() => {
-    // Check if admin is already authenticated (password stored in localStorage)
-    const storedAuth = localStorage.getItem('minas_admin_authenticated');
-    if (storedAuth === 'true') {
-      setIsAdminAuthenticated(true);
-    }
-  }, []);
-  
   const handleAdminLogin = () => {
+    if (!adminPassword) {
+      alert('Senha de admin nao configurada. Defina VITE_ADMIN_PASSWORD no ambiente.');
+      return;
+    }
+
     const password = prompt('Digite a senha de administrador:');
-    if (password === ADMIN_PASSWORD) {
+    if (password === adminPassword) {
       setIsAdminAuthenticated(true);
-      localStorage.setItem('minas_admin_authenticated', 'true');
       setIsAdminOpen(true);
     } else if (password !== null) {
       alert('Senha incorreta. Acesso negado.');
@@ -252,7 +250,6 @@ function App() {
   const handleAdminLogout = () => {
     setIsAdminAuthenticated(false);
     setIsAdminOpen(false);
-    localStorage.removeItem('minas_admin_authenticated');
   };
   
   // Check if device is desktop/PC (admin access only on desktop)
@@ -348,11 +345,12 @@ function App() {
 
   // Sync functions
   const getApiUrl = () => {
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      // For local development, use Vercel production URL
-      return 'https://minas-ten.vercel.app/api/data';
-    }
     return `${window.location.origin}/api/data`;
+  };
+
+  const getApiAuthHeaders = () => {
+    if (!adminApiToken) return {};
+    return { 'x-admin-token': adminApiToken };
   };
 
   // Compress image to very small size for cloud sync (ultra compression)
@@ -464,7 +462,8 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-        },
+          ...getApiAuthHeaders(),
+        } as Record<string, string>,
         body: JSON.stringify(optimizedData),
       });
 

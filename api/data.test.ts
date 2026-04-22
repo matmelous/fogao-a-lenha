@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import handler from './data';
+import handler from './data.js';
 
 type MockResponse = {
   statusCode: number;

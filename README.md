@@ -13,7 +13,12 @@ Copie `.env.example` para `.env` e preencha:
 
 - `VITE_ADMIN_PASSWORD`: senha usada no login admin do frontend.
 - `VITE_ADMIN_API_TOKEN`: token enviado no header `x-admin-token` para operacoes `POST` da API.
+- `VITE_NOTIFY_API_TOKEN`: token enviado pelo frontend para autenticar notificacoes de pedidos.
 - `ADMIN_API_TOKEN`: token validado no backend (deve ser igual ao token do frontend admin).
+- `NOTIFY_API_TOKEN`: token validado no endpoint `/api/notify-order` (igual ao token do frontend de notificacao).
+- `WA360_API_KEY`: chave da API 360dialog.
+- `WA360_TO_NUMBER`: WhatsApp (com codigo do pais) que recebera alertas de novos pedidos.
+- `WA360_API_URL`: URL da API da 360dialog (padrao `https://waba-v2.360dialog.io/messages`).
 - `ALLOWED_ORIGIN`: origem permitida por CORS na API.
 
 ## Scripts

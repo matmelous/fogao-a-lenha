@@ -46,6 +46,7 @@ function App() {
   const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
   const normalizedAdminPassword = typeof adminPassword === 'string' ? adminPassword.trim() : '';
   const adminApiToken = import.meta.env.VITE_ADMIN_API_TOKEN;
+  const notifyApiToken = import.meta.env.VITE_NOTIFY_API_TOKEN;
 
   // Version check for updates
   useEffect(() => {
@@ -180,6 +181,8 @@ function App() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [lastSyncStatus, setLastSyncStatus] = useState<{ success: boolean; time: string | null; error?: string }>({ success: false, time: null });
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
+  const [incomingOrderAlert, setIncomingOrderAlert] = useState<Order | null>(null);
+  const latestOrderSignatureRef = useRef<string | null>(null);
   
   // Admin authentication - only you have access
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
@@ -986,6 +989,49 @@ function App() {
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Dinheiro');
 
+  const playOrderAlarm = () => {
+    try {
+      const audioContext = new window.AudioContext();
+      const sequence = [880, 660, 880, 660];
+      sequence.forEach((frequency, index) => {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        oscillator.type = 'square';
+        oscillator.frequency.value = frequency;
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        const start = audioContext.currentTime + index * 0.18;
+        const end = start + 0.14;
+        gainNode.gain.setValueAtTime(0.0001, start);
+        gainNode.gain.exponentialRampToValueAtTime(0.18, start + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, end);
+        oscillator.start(start);
+        oscillator.stop(end);
+      });
+    } catch (error) {
+      console.error('Nao foi possivel tocar o alarme de pedido:', error);
+    }
+  };
+
+  const notifyOrderByWhatsapp = async (order: Order) => {
+    try {
+      const response = await fetch('/api/notify-order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(notifyApiToken ? { 'x-notify-token': notifyApiToken } : {}),
+        },
+        body: JSON.stringify(order),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Falha ao notificar pedido por WhatsApp API:', errorText);
+      }
+    } catch (error) {
+      console.error('Erro ao enviar notificacao por WhatsApp API:', error);
+    }
+  };
+
   const addToCart = (item: MenuItem) => {
     console.log('🛒 Adding to cart:', item.name, 'Available:', item.available);
     if (!item.available) {
@@ -1044,6 +1090,7 @@ function App() {
 
     // Add to orders list
     setOrders(prev => [newOrder, ...prev]);
+    void notifyOrderByWhatsapp(newOrder);
 
     // Prepare WhatsApp message
     const itemsList = cart.map(i => `*${i.quantity}x ${i.item.name}* - R$ ${(i.item.price * i.quantity).toFixed(2)}`).join('\n');
@@ -1077,6 +1124,20 @@ function App() {
     // Open WhatsApp in new tab
     window.open(whatsappUrl, '_blank');
   };
+
+  useEffect(() => {
+    if (!orders.length) return;
+    const latestOrder = orders[0];
+    const currentSignature = `${latestOrder.id}-${latestOrder.createdAt}`;
+    if (!latestOrderSignatureRef.current) {
+      latestOrderSignatureRef.current = currentSignature;
+      return;
+    }
+    if (latestOrderSignatureRef.current === currentSignature) return;
+    latestOrderSignatureRef.current = currentSignature;
+    setIncomingOrderAlert(latestOrder);
+    playOrderAlarm();
+  }, [orders]);
 
   const filteredItems = activeCategory === 'all' 
     ? items 
@@ -2095,6 +2156,62 @@ function App() {
           Peça pelo WhatsApp
         </span>
       </a>
+
+      {/* New Order Alert Modal */}
+      <AnimatePresence>
+        {incomingOrderAlert && (
+          <div className="fixed inset-0 z-[230] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-stone-900/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="relative w-full max-w-xl bg-white rounded-3xl shadow-2xl border border-orange-200 p-6 sm:p-8"
+            >
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <h3 className="text-2xl font-black text-orange-800 tracking-tight">Novo pedido recebido</h3>
+                <button
+                  onClick={() => setIncomingOrderAlert(null)}
+                  className="w-9 h-9 rounded-xl bg-stone-100 hover:bg-red-50 text-stone-500 hover:text-red-500 transition-all"
+                >
+                  <X size={18} className="mx-auto" />
+                </button>
+              </div>
+              <div className="space-y-2 text-sm font-bold text-stone-700">
+                <p><span className="text-stone-500">Pedido:</span> #{incomingOrderAlert.id}</p>
+                <p><span className="text-stone-500">Cliente:</span> {incomingOrderAlert.customerName}</p>
+                <p><span className="text-stone-500">WhatsApp:</span> {incomingOrderAlert.customerPhone}</p>
+                <p><span className="text-stone-500">Total:</span> {incomingOrderAlert.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+              </div>
+              <div className="mt-6 flex gap-3">
+                <button
+                  onClick={() => {
+                    setIncomingOrderAlert(null);
+                    if (isDesktop && isAdminAuthenticated) {
+                      setIsAdminOpen(true);
+                      setAdminTab('orders');
+                    }
+                  }}
+                  className="flex-1 px-4 py-3 rounded-2xl bg-orange-700 hover:bg-orange-800 text-white font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+                >
+                  Abrir painel de pedidos
+                </button>
+                <button
+                  onClick={playOrderAlarm}
+                  className="px-4 py-3 rounded-2xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+                >
+                  Tocar alarme
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Admin Access Modal - hidden access flow */}
       <AnimatePresence>

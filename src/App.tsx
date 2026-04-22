@@ -182,6 +182,10 @@ function App() {
   
   // Admin authentication - only you have access
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [isAdminAccessModalOpen, setIsAdminAccessModalOpen] = useState(false);
+  const [adminAccessPassword, setAdminAccessPassword] = useState('');
+  const adminTapCountRef = useRef(0);
+  const adminTapTimeoutRef = useRef<number | null>(null);
   
   // Auto-update restaurant name if it's the old one
   useEffect(() => {
@@ -233,17 +237,45 @@ function App() {
   }, []);
   
   const handleAdminLogin = () => {
+    if (!isDesktop) return;
+    setAdminAccessPassword('');
+    setIsAdminAccessModalOpen(true);
+  };
+
+  const handleAdminAccessSubmit = (event: { preventDefault: () => void }) => {
+    event.preventDefault();
     if (!adminPassword) {
       alert('Senha de admin nao configurada. Defina VITE_ADMIN_PASSWORD no ambiente.');
       return;
     }
-
-    const password = prompt('Digite a senha de administrador:');
-    if (password === adminPassword) {
+    if (adminAccessPassword === adminPassword) {
       setIsAdminAuthenticated(true);
       setIsAdminOpen(true);
-    } else if (password !== null) {
+      setIsAdminAccessModalOpen(false);
+      setAdminAccessPassword('');
+    } else {
       alert('Senha incorreta. Acesso negado.');
+      setAdminAccessPassword('');
+    }
+  };
+
+  const handleHiddenAdminTrigger = () => {
+    if (!isDesktop) return;
+    adminTapCountRef.current += 1;
+    if (adminTapTimeoutRef.current) {
+      window.clearTimeout(adminTapTimeoutRef.current);
+    }
+    adminTapTimeoutRef.current = window.setTimeout(() => {
+      adminTapCountRef.current = 0;
+    }, 2500);
+
+    if (adminTapCountRef.current >= 5) {
+      if (adminTapTimeoutRef.current) {
+        window.clearTimeout(adminTapTimeoutRef.current);
+        adminTapTimeoutRef.current = null;
+      }
+      adminTapCountRef.current = 0;
+      handleAdminLogin();
     }
   };
   
@@ -268,6 +300,14 @@ function App() {
     checkIsDesktop();
     window.addEventListener('resize', checkIsDesktop);
     return () => window.removeEventListener('resize', checkIsDesktop);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (adminTapTimeoutRef.current) {
+        window.clearTimeout(adminTapTimeoutRef.current);
+      }
+    };
   }, []);
   
   const [cart, setCart] = useState<{ item: MenuItem; quantity: number }[]>([]);
@@ -1612,7 +1652,11 @@ function App() {
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md shadow-sm border-b border-orange-100">
         <div className="container mx-auto px-3 sm:px-6 md:px-8 h-16 sm:h-24 flex items-center justify-between gap-3 py-2 sm:py-3">
-          <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1 overflow-hidden">
+          <div
+            className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1 overflow-hidden"
+            onClick={handleHiddenAdminTrigger}
+            title="Restaurante"
+          >
             {settings.logo ? (
               (() => {
                 // Logo size matches title text size: text-[11px] sm:text-lg md:text-2xl
@@ -1648,32 +1692,6 @@ function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-            {/* Admin button - only visible on desktop/PC and when authenticated */}
-            {isDesktop && isAdminAuthenticated && (
-            <button 
-              onClick={() => setIsAdminOpen(true)}
-                onTouchStart={(e) => e.stopPropagation()}
-                className="group flex items-center gap-1 sm:gap-2 p-2 sm:p-3 text-stone-400 hover:text-orange-700 hover:bg-orange-50 rounded-xl sm:rounded-2xl transition-all border border-transparent hover:border-orange-100 active:scale-95"
-              title="Painel de Controle (Admin)"
-                style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-            >
-                <Settings size={18} className="sm:w-[22px] sm:h-[22px] group-hover:rotate-90 transition-transform duration-500" />
-              <span className="hidden lg:block text-[10px] font-black uppercase tracking-widest">Painel Admin</span>
-            </button>
-            )}
-            {/* Admin login button - only visible on desktop/PC when not authenticated */}
-            {isDesktop && !isAdminAuthenticated && (
-              <button 
-                onClick={handleAdminLogin}
-                onTouchStart={(e) => e.stopPropagation()}
-                className="group flex items-center gap-1 sm:gap-2 p-2 sm:p-3 text-stone-400 hover:text-orange-700 hover:bg-orange-50 rounded-xl sm:rounded-2xl transition-all border border-transparent hover:border-orange-100 active:scale-95"
-                title="Acessar Painel Admin"
-                style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-              >
-                <Settings size={18} className="sm:w-[22px] sm:h-[22px] group-hover:rotate-90 transition-transform duration-500" />
-                <span className="hidden lg:block text-[10px] font-black uppercase tracking-widest">Admin</span>
-              </button>
-            )}
             <button 
               onClick={() => setIsCartOpen(true)}
               onTouchStart={(e) => e.stopPropagation()}
@@ -2064,6 +2082,58 @@ function App() {
           Peça pelo WhatsApp
         </span>
       </a>
+
+      {/* Admin Access Modal - hidden access flow */}
+      <AnimatePresence>
+        {isAdminAccessModalOpen && isDesktop && (
+          <div className="fixed inset-0 z-[210] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-stone-900/80 backdrop-blur-sm"
+              onClick={() => setIsAdminAccessModalOpen(false)}
+            />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-stone-200 p-6 sm:p-8"
+            >
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-xl font-black text-stone-900 tracking-tight">Acesso administrativo</h3>
+                <button
+                  onClick={() => setIsAdminAccessModalOpen(false)}
+                  className="w-9 h-9 rounded-xl bg-stone-100 hover:bg-red-50 text-stone-500 hover:text-red-500 transition-all"
+                >
+                  <X size={18} className="mx-auto" />
+                </button>
+              </div>
+              <form onSubmit={handleAdminAccessSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-[11px] font-black uppercase tracking-widest text-stone-500 mb-2">
+                    Senha
+                  </label>
+                  <input
+                    type="password"
+                    value={adminAccessPassword}
+                    onChange={(e) => setAdminAccessPassword(e.target.value)}
+                    autoFocus
+                    className="w-full px-4 py-3 rounded-2xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-orange-600"
+                    placeholder="Digite a senha de administrador"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full px-4 py-3 rounded-2xl bg-orange-700 hover:bg-orange-800 text-white font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+                >
+                  Entrar no painel
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Admin Modal - Only accessible on desktop/PC and when authenticated */}
       <AnimatePresence>

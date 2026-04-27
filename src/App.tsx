@@ -335,7 +335,7 @@ function App() {
   const [isPaymentReviewOpen, setIsPaymentReviewOpen] = useState(false);
   const [orderConfirmation, setOrderConfirmation] = useState<Order | null>(null);
   const [isNewItemModalOpen, setIsNewItemModalOpen] = useState(false);
-  const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '' });
+  const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '', image: '' });
   const defaultHeroForegroundImage = '/sabor-caseiro-hero.png';
   const heroForegroundImage = settings.heroImage || settings.logo || defaultHeroForegroundImage;
 
@@ -408,6 +408,7 @@ function App() {
       price: '',
       description: '',
       category: categoryId && categories.some(cat => cat.id === categoryId) ? categoryId : fallbackCategoryId,
+      image: '',
     });
     setIsNewItemModalOpen(true);
   };
@@ -4516,6 +4517,63 @@ function App() {
                   />
                 </div>
 
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">Imagem do Produto</label>
+                  <div className="rounded-[2rem] border border-stone-100 bg-stone-50/50 p-5">
+                    <div className="flex flex-col gap-4 md:flex-row md:items-center">
+                      <div className="flex h-32 w-full items-center justify-center overflow-hidden rounded-[1.5rem] border border-stone-200 bg-white md:w-40">
+                        {newItemForm.image ? (
+                          <img
+                            src={newItemForm.image}
+                            alt="Preview do produto"
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center gap-2 text-stone-300">
+                            <ImageIcon size={28} />
+                            <span className="text-[10px] font-black uppercase tracking-[0.2em]">Sem imagem</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 space-y-3">
+                        <button
+                          onClick={() => {
+                            const input = document.createElement('input');
+                            input.type = 'file';
+                            input.accept = 'image/*';
+                            input.onchange = async (e) => {
+                              const file = (e.target as HTMLInputElement).files?.[0];
+                              if (!file) return;
+
+                              try {
+                                await handleFileUpload(file, (base) => {
+                                  setNewItemForm({ ...newItemForm, image: base });
+                                });
+                              } catch (error) {
+                                console.error('Error uploading new item image:', error);
+                                alert('Erro ao fazer upload da imagem. Tente novamente.');
+                              }
+                            };
+                            input.click();
+                          }}
+                          className="w-full rounded-xl border border-orange-200 bg-white py-3 text-[10px] font-black uppercase tracking-widest text-orange-700 transition-all hover:bg-orange-50"
+                        >
+                          <Upload size={14} className="mr-2 inline-flex" /> {newItemForm.image ? 'Trocar imagem' : 'Enviar imagem'}
+                        </button>
+                        {newItemForm.image && (
+                          <button
+                            onClick={() => setNewItemForm({ ...newItemForm, image: '' })}
+                            className="w-full rounded-xl py-2 text-[10px] font-black uppercase tracking-widest text-red-500 transition-all hover:bg-red-50"
+                          >
+                            Remover imagem
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="flex gap-4 pt-6">
                   <button 
                     onClick={() => setIsNewItemModalOpen(false)}
@@ -4535,10 +4593,11 @@ function App() {
                         price: parseFloat(newItemForm.price.replace(',', '.')) || 0,
                         description: newItemForm.description || 'Item especial da casa...',
                         category: newItemForm.category,
+                        image: newItemForm.image || undefined,
                         available: true
                       };
                       setItems([...items, newItem]);
-                      setNewItemForm({ name: '', price: '', description: '', category: categories[0]?.id || '' });
+                      setNewItemForm({ name: '', price: '', description: '', category: categories[0]?.id || '', image: '' });
                       setIsNewItemModalOpen(false);
                     }}
                     className="flex-[2] bg-green-600 hover:bg-green-700 text-white font-black py-5 rounded-[1.5rem] shadow-xl uppercase text-xs tracking-widest transition-all"

@@ -336,6 +336,8 @@ function App() {
   const [orderConfirmation, setOrderConfirmation] = useState<Order | null>(null);
   const [isNewItemModalOpen, setIsNewItemModalOpen] = useState(false);
   const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '' });
+  const defaultHeroForegroundImage = '/sabor-caseiro-hero.png';
+  const heroForegroundImage = settings.heroImage || settings.logo || defaultHeroForegroundImage;
 
 
   const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.7): Promise<string> => {
@@ -392,6 +394,22 @@ function App() {
     };
     reader.readAsDataURL(file);
     }
+  };
+
+  const openNewItemModal = (categoryId?: string) => {
+    if (categories.length === 0) {
+      alert('Por favor, crie uma categoria primeiro!');
+      return;
+    }
+
+    const fallbackCategoryId = categories[0]?.id || '';
+    setNewItemForm({
+      name: '',
+      price: '',
+      description: '',
+      category: categoryId && categories.some(cat => cat.id === categoryId) ? categoryId : fallbackCategoryId,
+    });
+    setIsNewItemModalOpen(true);
   };
 
   // Persistence effects
@@ -1784,9 +1802,11 @@ function App() {
       </header>
 
       {/* Hero */}
-      <section className="relative h-[400px] sm:h-[500px] md:h-[600px] flex items-center justify-center overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/40 to-transparent z-10" />
-        {settings.heroVideo ? (
+      <section className="relative min-h-[540px] sm:min-h-[620px] md:min-h-[720px] flex items-center justify-center overflow-hidden bg-[#120c09]">
+        <div className="hero-wood-bg absolute inset-0" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.22),transparent_38%),radial-gradient(circle_at_bottom,rgba(120,53,15,0.55),transparent_42%)]" />
+        <div className="absolute inset-0 backdrop-blur-[2px]" />
+        {settings.heroVideo && !heroForegroundImage && (
           <video 
             key={`hero-video-${settings.heroVideo.substring(0, 50)}`}
             autoPlay 
@@ -1794,11 +1814,10 @@ function App() {
             loop 
             playsInline 
             preload="auto"
-            className="absolute inset-0 w-full h-full object-cover scale-105"
+            className="absolute inset-0 h-full w-full object-cover opacity-25 blur-sm scale-105"
             src={settings.heroVideo}
             onError={(e) => {
               console.error('Error loading hero video:', e);
-              // Fallback to image if video fails
               const videoElement = e.target as HTMLVideoElement;
               videoElement.style.display = 'none';
             }}
@@ -1806,29 +1825,41 @@ function App() {
               console.log('Hero video loaded successfully');
             }}
           />
-        ) : (
-          <img 
-            key={`hero-image-${settings.heroImage ? settings.heroImage.substring(0, 50) : 'default'}`}
-            src={settings.heroImage || "https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=2071&auto=format&fit=crop"} 
-            className="absolute inset-0 w-full h-full object-cover scale-105"
-            alt="Restaurante"
-            loading="eager"
-            onError={(e) => {
-              console.error('Error loading hero image:', e);
-              // Fallback if image fails to load
-              const target = e.target as HTMLImageElement;
-              target.src = "https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=2071&auto=format&fit=crop";
-            }}
-            onLoad={() => {
-              console.log('Hero image loaded successfully');
-            }}
-          />
         )}
-        <div className="relative z-20 text-center text-white px-4 max-w-4xl">
+        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(10,6,4,0.18),rgba(10,6,4,0.7))]" />
+        <div className="relative z-20 flex w-full max-w-6xl flex-col items-center gap-10 px-4 py-16 text-center text-white sm:px-6 md:gap-14 md:px-8">
+          <div className="relative flex w-full items-center justify-center">
+            <div className="absolute h-40 w-40 rounded-full bg-orange-500/20 blur-3xl sm:h-56 sm:w-56 md:h-72 md:w-72" />
+            <div className="absolute h-[68%] w-[72%] max-w-3xl rounded-[3rem] border border-white/8 bg-black/18 backdrop-blur-md shadow-[0_30px_120px_rgba(0,0,0,0.45)]" />
+            {heroForegroundImage ? (
+              <img
+                key={`hero-foreground-${heroForegroundImage.substring(0, 50)}`}
+                src={heroForegroundImage}
+                className="relative z-10 max-h-[180px] w-auto max-w-[min(94vw,1200px)] object-contain mix-blend-multiply drop-shadow-[0_24px_40px_rgba(0,0,0,0.75)] sm:max-h-[240px] md:max-h-[320px] lg:max-h-[360px]"
+                alt={settings.name || 'Logo do restaurante'}
+                loading="eager"
+                onError={(e) => {
+                  console.error('Error loading hero foreground image:', e);
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                }}
+                onLoad={() => {
+                  console.log('Hero foreground image loaded successfully');
+                }}
+              />
+            ) : (
+              <div className="relative z-10 flex h-44 w-44 items-center justify-center rounded-[2.5rem] border border-orange-200/20 bg-white/10 px-8 text-center shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-lg sm:h-56 sm:w-56 md:h-72 md:w-72">
+                <span className="text-3xl font-black tracking-tight text-orange-100 sm:text-4xl md:text-5xl">
+                  {(settings.name || 'Fogão a Lenha').split(' ').filter(Boolean).slice(0, 2).join(' ')}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="w-full max-w-[min(90vw,900px)]">
           <motion.span 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="inline-block px-3 py-1 sm:px-4 sm:py-1.5 bg-orange-700 text-white text-[10px] sm:text-xs font-black uppercase tracking-[0.2em] sm:tracking-[0.3em] rounded-full mb-4 sm:mb-6 shadow-xl"
+            className="mb-4 inline-block rounded-full border border-orange-200/20 bg-orange-500/80 px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-white shadow-xl shadow-orange-950/30 backdrop-blur-sm sm:mb-6 sm:px-4 sm:py-1.5 sm:text-xs sm:tracking-[0.3em]"
           >
             Bem-vindo!
           </motion.span>
@@ -1836,7 +1867,7 @@ function App() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="text-3xl sm:text-4xl md:text-6xl lg:text-8xl font-black mb-4 sm:mb-6 md:mb-8 leading-[0.9] tracking-tighter px-2"
+            className="mb-4 px-2 text-3xl font-black leading-[0.92] tracking-tighter text-white sm:mb-6 sm:text-4xl md:mb-8 md:text-5xl lg:text-6xl"
           >
             O sabor <span className="text-orange-400 underline decoration-orange-400/30 underline-offset-4 sm:underline-offset-8">autêntico</span> da Comida Caseira
           </motion.h2>
@@ -1844,29 +1875,30 @@ function App() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="text-sm sm:text-lg md:text-xl lg:text-2xl mb-8 sm:mb-10 md:mb-12 font-medium text-stone-200 max-w-2xl mx-auto leading-relaxed px-2"
+            className="mx-auto mb-8 max-w-[42rem] px-2 text-sm font-medium leading-relaxed text-stone-200 sm:mb-10 sm:text-lg md:mb-12 md:text-xl lg:text-[1.35rem]"
           >
-            Pedidos pelo site em Adicionar ou pelo WhatssApp clicando no botão abaixo.
+            Pedidos pelo site em Adicionar ou pelo WhatsApp clicando no botão abaixo.
           </motion.p>
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.3 }}
-            className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 w-full px-4"
+            className="flex w-full flex-col items-center justify-center gap-3 px-4 sm:flex-row sm:gap-4"
           >
             <a 
               href="#menu" 
-              className="w-full sm:w-auto px-8 sm:px-12 py-3 sm:py-5 bg-orange-700 hover:bg-orange-800 text-white text-sm sm:text-lg font-black rounded-2xl sm:rounded-3xl transition-all shadow-2xl shadow-orange-700/40 hover:-translate-y-1 active:scale-95 uppercase tracking-widest"
+              className="w-full rounded-2xl bg-orange-700 px-8 py-3 text-sm font-black uppercase tracking-widest text-white shadow-2xl shadow-orange-950/40 transition-all hover:-translate-y-1 hover:bg-orange-800 active:scale-95 sm:w-auto sm:rounded-3xl sm:px-12 sm:py-5 sm:text-lg"
             >
               Ver Cardápio
             </a>
             <a 
               href="#contact" 
-              className="w-full sm:w-auto px-8 sm:px-12 py-3 sm:py-5 bg-white/10 hover:bg-white/20 backdrop-blur-md text-white text-sm sm:text-lg font-black rounded-2xl sm:rounded-3xl transition-all border border-white/30 hover:-translate-y-1 active:scale-95 uppercase tracking-widest"
+              className="w-full rounded-2xl border border-white/20 bg-white/10 px-8 py-3 text-sm font-black uppercase tracking-widest text-white backdrop-blur-md transition-all hover:-translate-y-1 hover:bg-white/20 active:scale-95 sm:w-auto sm:rounded-3xl sm:px-12 sm:py-5 sm:text-lg"
             >
               Localização
             </a>
           </motion.div>
+          </div>
         </div>
       </section>
 
@@ -2536,14 +2568,7 @@ function App() {
                           <p className="text-stone-400 font-bold text-xs uppercase tracking-widest">Adicione e edite seus pratos</p>
                         </div>
                         <button 
-                          onClick={() => {
-                            if (categories.length === 0) {
-                              alert('Por favor, crie uma categoria primeiro!');
-                              return;
-                            }
-                            setNewItemForm({ name: '', price: '', description: '', category: categories[0]?.id || '' });
-                            setIsNewItemModalOpen(true);
-                          }}
+                          onClick={() => openNewItemModal()}
                           className="px-8 py-4 bg-orange-700 hover:bg-orange-800 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-2xl shadow-orange-700/20 transition-all active:scale-95 flex items-center gap-3"
                         >
                           <Plus size={20} /> Novo Item
@@ -2822,14 +2847,15 @@ function App() {
                         {categories.map(cat => {
                           const itemsInCategory = items.filter(item => item.category === cat.id).length;
                           return (
-                          <div key={cat.id} data-category-id={cat.id} className="p-8 bg-white border border-stone-100 rounded-[2.5rem] flex items-center justify-between shadow-sm group hover:border-orange-200 transition-colors">
-                            <div className="flex flex-col">
-                            <span className="font-black text-lg text-stone-900 tracking-tight">{cat.name}</span>
-                              <span className="text-xs text-stone-400 font-bold uppercase tracking-widest mt-1">
-                                {itemsInCategory} {itemsInCategory === 1 ? 'item' : 'itens'}
-                              </span>
-                            </div>
-                            <div className="flex gap-2">
+                          <div key={cat.id} data-category-id={cat.id} className="p-8 bg-white border border-stone-100 rounded-[2.5rem] shadow-sm group hover:border-orange-200 transition-colors">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex flex-col">
+                                <span className="font-black text-lg text-stone-900 tracking-tight">{cat.name}</span>
+                                <span className="text-xs text-stone-400 font-bold uppercase tracking-widest mt-1">
+                                  {itemsInCategory} {itemsInCategory === 1 ? 'item' : 'itens'}
+                                </span>
+                              </div>
+                              <div className="flex gap-2">
                               <button 
                                 onClick={() => {
                                   const newName = prompt('Novo nome:', cat.name);
@@ -2931,7 +2957,14 @@ function App() {
                               >
                                 <Trash2 size={18} />
                               </button>
+                              </div>
                             </div>
+                            <button
+                              onClick={() => openNewItemModal(cat.id)}
+                              className="mt-5 w-full rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-orange-700 transition-all hover:border-orange-300 hover:bg-orange-100"
+                            >
+                              {itemsInCategory === 0 ? 'Adicionar primeiro item' : 'Adicionar item nesta categoria'}
+                            </button>
                           </div>
                           );
                         })}

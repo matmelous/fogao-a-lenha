@@ -335,6 +335,7 @@ function App() {
   const [isPaymentReviewOpen, setIsPaymentReviewOpen] = useState(false);
   const [orderConfirmation, setOrderConfirmation] = useState<Order | null>(null);
   const [isNewItemModalOpen, setIsNewItemModalOpen] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '', image: '' });
   const defaultHeroForegroundImage = '/sabor-caseiro-hero.png';
   const heroForegroundImage = settings.heroImage || settings.logo || defaultHeroForegroundImage;
@@ -410,6 +411,19 @@ function App() {
       category: categoryId && categories.some(cat => cat.id === categoryId) ? categoryId : fallbackCategoryId,
       image: '',
     });
+    setEditingItemId(null);
+    setIsNewItemModalOpen(true);
+  };
+
+  const openEditItemModal = (item: MenuItem) => {
+    setNewItemForm({
+      name: item.name,
+      price: item.price.toString(),
+      description: item.description || '',
+      category: item.category,
+      image: item.image || '',
+    });
+    setEditingItemId(item.id);
     setIsNewItemModalOpen(true);
   };
 
@@ -2752,43 +2766,11 @@ function App() {
                                 <Upload size={22} />
                               </button>
                               <button 
-                                onClick={() => {
-                                  const newName = prompt('Novo nome:', item.name);
-                                  if (newName) setItems(items.map(i => i.id === item.id ? {...i, name: newName} : i));
-                                }}
+                                onClick={() => openEditItemModal(item)}
                                 className="w-12 h-12 flex items-center justify-center text-stone-400 hover:text-orange-700 hover:bg-orange-50 rounded-2xl transition-all"
-                                title="Editar Nome"
+                                title="Editar Item"
                               >
                                 <Edit size={22} />
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  const newPrice = prompt('Novo preço (R$):', item.price.toString());
-                                  if (newPrice) {
-                                    const price = parseFloat(newPrice.replace(',', '.'));
-                                    if (!isNaN(price) && price >= 0) {
-                                      setItems(items.map(i => i.id === item.id ? {...i, price} : i));
-                                    } else {
-                                      alert('Preço inválido. Use apenas números.');
-                                    }
-                                  }
-                                }}
-                                className="w-12 h-12 flex items-center justify-center text-stone-400 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all"
-                                title="Editar Preço"
-                              >
-                                <CreditCard size={22} />
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  const newDescription = prompt('Nova descrição:', item.description);
-                                  if (newDescription !== null) {
-                                    setItems(items.map(i => i.id === item.id ? {...i, description: newDescription} : i));
-                                  }
-                                }}
-                                className="w-12 h-12 flex items-center justify-center text-stone-400 hover:text-purple-600 hover:bg-purple-50 rounded-2xl transition-all"
-                                title="Editar Descrição"
-                              >
-                                <MessageCircle size={22} />
                               </button>
                               <button 
                                 onClick={() => setItems(items.filter(i => i.id !== item.id))}
@@ -4440,7 +4422,10 @@ function App() {
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
               exit={{ opacity: 0 }} 
-              onClick={() => setIsNewItemModalOpen(false)} 
+              onClick={() => {
+                setEditingItemId(null);
+                setIsNewItemModalOpen(false);
+              }} 
               className="absolute inset-0 bg-stone-900/95 backdrop-blur-xl" 
             />
             <motion.div 
@@ -4456,12 +4441,17 @@ function App() {
                     <Plus size={32} />
                   </div>
                   <div>
-                    <h3 className="text-4xl font-black text-stone-900 tracking-tighter">Novo Item</h3>
-                    <p className="text-stone-400 font-bold uppercase text-[10px] tracking-widest mt-1">Adicionar ao Cardápio</p>
+                    <h3 className="text-4xl font-black text-stone-900 tracking-tighter">{editingItemId ? 'Editar Item' : 'Novo Item'}</h3>
+                    <p className="text-stone-400 font-bold uppercase text-[10px] tracking-widest mt-1">
+                      {editingItemId ? 'Atualize o produto completo' : 'Adicionar ao Cardápio'}
+                    </p>
                   </div>
                 </div>
                 <button 
-                  onClick={() => setIsNewItemModalOpen(false)} 
+                  onClick={() => {
+                    setEditingItemId(null);
+                    setIsNewItemModalOpen(false);
+                  }} 
                   className="w-14 h-14 bg-white hover:bg-red-50 text-stone-400 hover:text-red-500 rounded-2xl transition-all shadow-xl flex items-center justify-center active:scale-90"
                 >
                   <X size={28} />
@@ -4574,9 +4564,33 @@ function App() {
                   </div>
                 </div>
 
+                {editingItemId && (
+                  <div className="flex items-center justify-between rounded-[2rem] border border-stone-100 bg-stone-50/50 px-6 py-5">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Disponibilidade</p>
+                      <p className="mt-2 text-sm font-bold text-stone-600">Controle se o item aparece como disponível no cardápio.</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const currentItem = items.find(item => item.id === editingItemId);
+                        if (!currentItem) return;
+                        setItems(items.map(item =>
+                          item.id === editingItemId ? { ...item, available: !item.available } : item
+                        ));
+                      }}
+                      className={`relative h-8 w-14 rounded-full transition-all ${items.find(item => item.id === editingItemId)?.available ? 'bg-green-500 shadow-lg shadow-green-500/20' : 'bg-stone-200'}`}
+                    >
+                      <div className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow-md transition-all ${items.find(item => item.id === editingItemId)?.available ? 'left-7' : 'left-1'}`} />
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex gap-4 pt-6">
                   <button 
-                    onClick={() => setIsNewItemModalOpen(false)}
+                    onClick={() => {
+                      setEditingItemId(null);
+                      setIsNewItemModalOpen(false);
+                    }}
                     className="flex-1 bg-stone-200 text-stone-600 font-black py-5 rounded-[1.5rem] uppercase text-xs tracking-widest transition-all hover:bg-stone-300"
                   >
                     Cancelar
@@ -4587,22 +4601,39 @@ function App() {
                         alert('Por favor, preencha todos os campos obrigatórios!');
                         return;
                       }
-                      const newItem: MenuItem = {
-                        id: generateId(),
-                        name: newItemForm.name,
-                        price: parseFloat(newItemForm.price.replace(',', '.')) || 0,
-                        description: newItemForm.description || 'Item especial da casa...',
-                        category: newItemForm.category,
-                        image: newItemForm.image || undefined,
-                        available: true
-                      };
-                      setItems([...items, newItem]);
+                      const parsedPrice = parseFloat(newItemForm.price.replace(',', '.')) || 0;
+                      if (editingItemId) {
+                        setItems(items.map(item =>
+                          item.id === editingItemId
+                            ? {
+                                ...item,
+                                name: newItemForm.name,
+                                price: parsedPrice,
+                                description: newItemForm.description || 'Item especial da casa...',
+                                category: newItemForm.category,
+                                image: newItemForm.image || undefined,
+                              }
+                            : item
+                        ));
+                      } else {
+                        const newItem: MenuItem = {
+                          id: generateId(),
+                          name: newItemForm.name,
+                          price: parsedPrice,
+                          description: newItemForm.description || 'Item especial da casa...',
+                          category: newItemForm.category,
+                          image: newItemForm.image || undefined,
+                          available: true
+                        };
+                        setItems([...items, newItem]);
+                      }
                       setNewItemForm({ name: '', price: '', description: '', category: categories[0]?.id || '', image: '' });
+                      setEditingItemId(null);
                       setIsNewItemModalOpen(false);
                     }}
                     className="flex-[2] bg-green-600 hover:bg-green-700 text-white font-black py-5 rounded-[1.5rem] shadow-xl uppercase text-xs tracking-widest transition-all"
                   >
-                    Adicionar Item
+                    {editingItemId ? 'Salvar Alterações' : 'Adicionar Item'}
                   </button>
                 </div>
               </div>

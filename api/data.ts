@@ -1,6 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 
 type PersistedData = {
   categories?: unknown[];
@@ -10,7 +8,25 @@ type PersistedData = {
   lastUpdated?: string;
 };
 
-const DATA_FILE_PATH = path.join('/tmp', 'minas-data.json');
+type ApiRequest = {
+  method?: string;
+  headers: Record<string, string | string[] | undefined>;
+  body?: {
+    categories?: unknown[];
+    items?: unknown[];
+    settings?: unknown;
+    orders?: unknown[];
+  };
+};
+
+type ApiResponse = {
+  setHeader: (key: string, value: string) => void;
+  status: (code: number) => ApiResponse;
+  json: (payload: unknown) => ApiResponse;
+  end: () => ApiResponse;
+};
+
+const DATA_FILE_PATH = '/tmp/minas-data.json';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? '*';
 
 const readDataStore = async (): Promise<PersistedData> => {
@@ -27,8 +43,8 @@ const writeDataStore = async (data: PersistedData) => {
 };
 
 export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse,
+  req: ApiRequest,
+  res: ApiResponse,
 ) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
@@ -63,7 +79,7 @@ export default async function handler(
         }
       }
 
-      const { categories, items, settings, orders } = req.body;
+      const { categories, items, settings, orders } = req.body ?? {};
 
       // Validate required data
       if (!categories || !items || !settings) {

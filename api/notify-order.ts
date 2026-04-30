@@ -1,5 +1,3 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
 type OrderPayload = {
   id: string;
   customerName: string;
@@ -8,6 +6,19 @@ type OrderPayload = {
   total: number;
   paymentMethod: string;
   items: Array<{ quantity: number; item: { name: string; price: number } }>;
+};
+
+type ApiRequest = {
+  method?: string;
+  headers: Record<string, string | string[] | undefined>;
+  body?: OrderPayload;
+};
+
+type ApiResponse = {
+  setHeader: (key: string, value: string) => void;
+  status: (code: number) => ApiResponse;
+  json: (payload: unknown) => ApiResponse;
+  end: () => ApiResponse;
 };
 
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? '*';
@@ -34,7 +45,7 @@ const buildOrderMessage = (order: OrderPayload) => {
   ].join('\n');
 };
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: ApiRequest, res: ApiResponse) {
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-notify-token');

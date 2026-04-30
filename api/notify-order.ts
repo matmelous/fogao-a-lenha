@@ -89,17 +89,19 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
-  const notifyToken = process.env.NOTIFY_API_TOKEN;
+  const notifyToken = typeof process.env.NOTIFY_API_TOKEN === 'string'
+    ? process.env.NOTIFY_API_TOKEN.trim()
+    : '';
   if (notifyToken) {
     const requestToken = req.headers['x-notify-token'];
-    const token = Array.isArray(requestToken) ? requestToken[0] : requestToken;
+    const token = (Array.isArray(requestToken) ? requestToken[0] : requestToken)?.trim();
     if (token !== notifyToken) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
   }
 
-  const apiKey = process.env.WA360_API_KEY;
-  const targetNumber = process.env.WA360_TO_NUMBER;
+  const apiKey = typeof process.env.WA360_API_KEY === 'string' ? process.env.WA360_API_KEY.trim() : '';
+  const targetNumber = typeof process.env.WA360_TO_NUMBER === 'string' ? process.env.WA360_TO_NUMBER.trim() : '';
   if (!apiKey || !targetNumber) {
     return res.status(500).json({
       success: false,
@@ -112,7 +114,9 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     return res.status(400).json({ success: false, error: 'Invalid order payload' });
   }
 
-  const endpoint = process.env.WA360_API_URL ?? 'https://waba-v2.360dialog.io/messages';
+  const endpoint = typeof process.env.WA360_API_URL === 'string' && process.env.WA360_API_URL.trim()
+    ? process.env.WA360_API_URL.trim()
+    : 'https://waba-v2.360dialog.io/messages';
   const body = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',

@@ -45,8 +45,12 @@ const generateId = () => {
 function App() {
   const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
   const normalizedAdminPassword = typeof adminPassword === 'string' ? adminPassword.trim() : '';
-  const adminApiToken = import.meta.env.VITE_ADMIN_API_TOKEN;
-  const notifyApiToken = import.meta.env.VITE_NOTIFY_API_TOKEN;
+  const adminApiToken = typeof import.meta.env.VITE_ADMIN_API_TOKEN === 'string'
+    ? import.meta.env.VITE_ADMIN_API_TOKEN.trim()
+    : '';
+  const notifyApiToken = typeof import.meta.env.VITE_NOTIFY_API_TOKEN === 'string'
+    ? import.meta.env.VITE_NOTIFY_API_TOKEN.trim()
+    : '';
 
   // Version check for updates
   useEffect(() => {

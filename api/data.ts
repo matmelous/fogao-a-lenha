@@ -99,10 +99,12 @@ export default async function handler(
 
   if (req.method === 'POST') {
     try {
-      const adminApiToken = process.env.ADMIN_API_TOKEN;
+      const adminApiToken = typeof process.env.ADMIN_API_TOKEN === 'string'
+        ? process.env.ADMIN_API_TOKEN.trim()
+        : '';
       if (adminApiToken) {
         const requestToken = req.headers['x-admin-token'];
-        const token = Array.isArray(requestToken) ? requestToken[0] : requestToken;
+        const token = (Array.isArray(requestToken) ? requestToken[0] : requestToken)?.trim();
         if (token !== adminApiToken) {
           return res.status(401).json({
             success: false,

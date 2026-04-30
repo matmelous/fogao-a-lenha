@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import handler from './data.js';
+import handler from '../api/data.js';
 
 type MockResponse = {
   statusCode: number;
@@ -13,7 +12,7 @@ type MockResponse = {
   end: () => MockResponse;
 };
 
-const dataFilePath = path.join('/tmp', 'minas-data.json');
+const dataFilePath = '/tmp/minas-data.json';
 
 const createMockResponse = (): MockResponse => {
   const response: MockResponse = {

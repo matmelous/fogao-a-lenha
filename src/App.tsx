@@ -336,9 +336,14 @@ function App() {
   const [orderConfirmation, setOrderConfirmation] = useState<Order | null>(null);
   const [isNewItemModalOpen, setIsNewItemModalOpen] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '', image: '' });
+  const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '', image: '', available: true });
   const defaultHeroForegroundImage = '/sabor-caseiro-hero.png';
   const heroForegroundImage = settings.heroImage || settings.logo || defaultHeroForegroundImage;
+  const latestDataRef = useRef({ categories, items, settings, orders });
+
+  useEffect(() => {
+    latestDataRef.current = { categories, items, settings, orders };
+  }, [categories, items, settings, orders]);
 
 
   const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.7): Promise<string> => {
@@ -410,6 +415,7 @@ function App() {
       description: '',
       category: categoryId && categories.some(cat => cat.id === categoryId) ? categoryId : fallbackCategoryId,
       image: '',
+      available: true,
     });
     setEditingItemId(null);
     setIsNewItemModalOpen(true);
@@ -422,6 +428,7 @@ function App() {
       description: item.description || '',
       category: item.category,
       image: item.image || '',
+      available: item.available,
     });
     setEditingItemId(item.id);
     setIsNewItemModalOpen(true);
@@ -476,9 +483,16 @@ function App() {
 
   // Optimize data for cloud sync with compressed images (to reduce payload size but keep images)
   const optimizeDataForSync = async () => {
+    const {
+      categories: latestCategories,
+      items: latestItems,
+      settings: latestSettings,
+      orders: latestOrders,
+    } = latestDataRef.current;
+
     // Compress images in items (ultra compression for sync)
     const optimizedItems = await Promise.all(
-      items.map(async (item) => ({
+      latestItems.map(async (item) => ({
         id: item.id,
         name: item.name,
         description: item.description,
@@ -491,33 +505,33 @@ function App() {
 
     // Compress images in settings (ultra compression for sync)
     const optimizedSettings = {
-      name: settings.name,
-      phone: settings.phone,
-      whatsapp: settings.whatsapp,
-      address: settings.address,
-      openingHours: settings.openingHours,
-      deliveryFee: settings.deliveryFee,
-      minOrder: settings.minOrder,
-      paymentMethods: settings.paymentMethods,
-      logoSize: settings.logoSize,
-      logoSizePx: settings.logoSizePx,
-      aboutImage1Size: settings.aboutImage1Size,
-      aboutImage1SizePx: settings.aboutImage1SizePx,
-      aboutImage2Size: settings.aboutImage2Size,
-      aboutImage2SizePx: settings.aboutImage2SizePx,
+      name: latestSettings.name,
+      phone: latestSettings.phone,
+      whatsapp: latestSettings.whatsapp,
+      address: latestSettings.address,
+      openingHours: latestSettings.openingHours,
+      deliveryFee: latestSettings.deliveryFee,
+      minOrder: latestSettings.minOrder,
+      paymentMethods: latestSettings.paymentMethods,
+      logoSize: latestSettings.logoSize,
+      logoSizePx: latestSettings.logoSizePx,
+      aboutImage1Size: latestSettings.aboutImage1Size,
+      aboutImage1SizePx: latestSettings.aboutImage1SizePx,
+      aboutImage2Size: latestSettings.aboutImage2Size,
+      aboutImage2SizePx: latestSettings.aboutImage2SizePx,
       // Compress media images for sync
-      logo: settings.logo ? await compressImageForSync(settings.logo, 200, 0.4) : '',
-      heroImage: settings.heroImage ? await compressImageForSync(settings.heroImage, 800, 0.4) : '',
-      heroVideo: settings.heroVideo || '', // Videos are not compressed
-      aboutImage1: settings.aboutImage1 ? await compressImageForSync(settings.aboutImage1, 600, 0.4) : '',
-      aboutImage2: settings.aboutImage2 ? await compressImageForSync(settings.aboutImage2, 600, 0.4) : ''
+      logo: latestSettings.logo ? await compressImageForSync(latestSettings.logo, 200, 0.4) : '',
+      heroImage: latestSettings.heroImage ? await compressImageForSync(latestSettings.heroImage, 800, 0.4) : '',
+      heroVideo: latestSettings.heroVideo || '', // Videos are not compressed
+      aboutImage1: latestSettings.aboutImage1 ? await compressImageForSync(latestSettings.aboutImage1, 600, 0.4) : '',
+      aboutImage2: latestSettings.aboutImage2 ? await compressImageForSync(latestSettings.aboutImage2, 600, 0.4) : ''
     };
 
     // Limit orders to last 100 to prevent payload from being too large
-    const limitedOrders = (orders || []).slice(-100);
+    const limitedOrders = (latestOrders || []).slice(-100);
 
     return {
-      categories,
+      categories: latestCategories,
       items: optimizedItems,
       settings: optimizedSettings,
       orders: limitedOrders,
@@ -614,6 +628,7 @@ function App() {
         
         // Only update if cloud data exists
         if (cloudData.categories && cloudData.items && cloudData.settings) {
+          const { items: localItems, settings: localSettings } = latestDataRef.current;
           // Merge with local data if preserveLocalImages is true
           let mergedItems = cloudData.items;
           let mergedSettings = cloudData.settings;
@@ -622,7 +637,7 @@ function App() {
             // Preserve local images in items - but only if local image exists
             // If local image is empty, it means it was never set or was cleared
             mergedItems = cloudData.items.map((cloudItem: MenuItem) => {
-              const localItem = items.find(item => item.id === cloudItem.id);
+              const localItem = localItems.find(item => item.id === cloudItem.id);
               // Use cloud image if it exists (since it now contains compressed images from admin sync),
               // otherwise keep local image. This ensures mobile gets the updated images.
               return {
@@ -634,23 +649,23 @@ function App() {
             // Preserve local images in settings - but only if cloud image is missing
             mergedSettings = {
               ...cloudData.settings,
-              logo: (cloudData.settings.logo && cloudData.settings.logo.trim() !== '') ? cloudData.settings.logo : (settings.logo || ''),
-              logoSize: cloudData.settings.logoSize || settings.logoSize,
-              logoSizePx: cloudData.settings.logoSizePx || settings.logoSizePx,
-              heroVideo: (cloudData.settings.heroVideo && cloudData.settings.heroVideo.trim() !== '') ? cloudData.settings.heroVideo : (settings.heroVideo || ''),
-              heroImage: (cloudData.settings.heroImage && cloudData.settings.heroImage.trim() !== '') ? cloudData.settings.heroImage : (settings.heroImage || ''),
-              aboutImage1: (cloudData.settings.aboutImage1 && cloudData.settings.aboutImage1.trim() !== '') ? cloudData.settings.aboutImage1 : (settings.aboutImage1 || ''),
-              aboutImage1Size: cloudData.settings.aboutImage1Size || settings.aboutImage1Size,
-              aboutImage1SizePx: cloudData.settings.aboutImage1SizePx || settings.aboutImage1SizePx,
-              aboutImage2: (cloudData.settings.aboutImage2 && cloudData.settings.aboutImage2.trim() !== '') ? cloudData.settings.aboutImage2 : (settings.aboutImage2 || ''),
-              aboutImage2Size: cloudData.settings.aboutImage2Size || settings.aboutImage2Size,
-              aboutImage2SizePx: cloudData.settings.aboutImage2SizePx || settings.aboutImage2SizePx
+              logo: (cloudData.settings.logo && cloudData.settings.logo.trim() !== '') ? cloudData.settings.logo : (localSettings.logo || ''),
+              logoSize: cloudData.settings.logoSize || localSettings.logoSize,
+              logoSizePx: cloudData.settings.logoSizePx || localSettings.logoSizePx,
+              heroVideo: (cloudData.settings.heroVideo && cloudData.settings.heroVideo.trim() !== '') ? cloudData.settings.heroVideo : (localSettings.heroVideo || ''),
+              heroImage: (cloudData.settings.heroImage && cloudData.settings.heroImage.trim() !== '') ? cloudData.settings.heroImage : (localSettings.heroImage || ''),
+              aboutImage1: (cloudData.settings.aboutImage1 && cloudData.settings.aboutImage1.trim() !== '') ? cloudData.settings.aboutImage1 : (localSettings.aboutImage1 || ''),
+              aboutImage1Size: cloudData.settings.aboutImage1Size || localSettings.aboutImage1Size,
+              aboutImage1SizePx: cloudData.settings.aboutImage1SizePx || localSettings.aboutImage1SizePx,
+              aboutImage2: (cloudData.settings.aboutImage2 && cloudData.settings.aboutImage2.trim() !== '') ? cloudData.settings.aboutImage2 : (localSettings.aboutImage2 || ''),
+              aboutImage2Size: cloudData.settings.aboutImage2Size || localSettings.aboutImage2Size,
+              aboutImage2SizePx: cloudData.settings.aboutImage2SizePx || localSettings.aboutImage2SizePx
             };
           } else {
             // If not preserving, use cloud data as-is (but cloud data has no images, so they'll be empty)
             // In this case, we should keep local images if they exist
             mergedItems = cloudData.items.map((cloudItem: MenuItem) => {
-              const localItem = items.find(item => item.id === cloudItem.id);
+              const localItem = localItems.find(item => item.id === cloudItem.id);
               return {
                 ...cloudItem,
                 image: localItem?.image || '' // Keep local image if exists, otherwise empty
@@ -659,17 +674,17 @@ function App() {
             
             mergedSettings = {
               ...cloudData.settings,
-              logo: settings.logo || '',
-              logoSize: cloudData.settings.logoSize || settings.logoSize,
-              logoSizePx: cloudData.settings.logoSizePx || settings.logoSizePx,
-              heroVideo: settings.heroVideo || '',
-              heroImage: settings.heroImage || '',
-              aboutImage1: settings.aboutImage1 || '',
-              aboutImage1Size: cloudData.settings.aboutImage1Size || settings.aboutImage1Size,
-              aboutImage1SizePx: cloudData.settings.aboutImage1SizePx || settings.aboutImage1SizePx,
-              aboutImage2: settings.aboutImage2 || '',
-              aboutImage2Size: cloudData.settings.aboutImage2Size || settings.aboutImage2Size,
-              aboutImage2SizePx: cloudData.settings.aboutImage2SizePx || settings.aboutImage2SizePx
+              logo: localSettings.logo || '',
+              logoSize: cloudData.settings.logoSize || localSettings.logoSize,
+              logoSizePx: cloudData.settings.logoSizePx || localSettings.logoSizePx,
+              heroVideo: localSettings.heroVideo || '',
+              heroImage: localSettings.heroImage || '',
+              aboutImage1: localSettings.aboutImage1 || '',
+              aboutImage1Size: cloudData.settings.aboutImage1Size || localSettings.aboutImage1Size,
+              aboutImage1SizePx: cloudData.settings.aboutImage1SizePx || localSettings.aboutImage1SizePx,
+              aboutImage2: localSettings.aboutImage2 || '',
+              aboutImage2Size: cloudData.settings.aboutImage2Size || localSettings.aboutImage2Size,
+              aboutImage2SizePx: cloudData.settings.aboutImage2SizePx || localSettings.aboutImage2SizePx
             };
           }
           
@@ -757,8 +772,14 @@ function App() {
     
     const checkCloudUpdates = async () => {
       try {
+        const {
+          categories: currentCategories,
+          items: currentItems,
+          settings: currentSettings,
+          orders: currentOrders,
+        } = latestDataRef.current;
         // Create backup before loading from cloud
-        createBackup(categories, items, settings, orders);
+        createBackup(currentCategories, currentItems, currentSettings, currentOrders);
         
         const response = await fetch(getApiUrl());
         const result = await response.json();
@@ -812,11 +833,16 @@ function App() {
         checkCloudUpdates();
       }
     };
+    const handleFocus = () => {
+      checkCloudUpdates();
+    };
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
     
     return () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
     };
   }, []);
 
@@ -837,14 +863,14 @@ function App() {
 
   // Auto-sync to cloud when data changes (debounced)
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isInitialized || !isDesktop || !isAdminAuthenticated) return;
     
     const syncTimeout = setTimeout(() => {
       syncToCloud();
     }, 2000); // Wait 2 seconds after last change before syncing
 
     return () => clearTimeout(syncTimeout);
-  }, [categories, items, settings, isInitialized]);
+  }, [categories, items, settings, isInitialized, isDesktop, isAdminAuthenticated]);
 
   // No forced migration - allow any name
 
@@ -2673,7 +2699,7 @@ function App() {
                                                     }
                                                     
                                                     // Update items state
-                                                    const updatedItems = items.map(i => 
+                                                    const updatedItems = latestDataRef.current.items.map(i => 
                                                       i.id === item.id ? {...i, category: cat.id} : i
                                                     );
                                                     
@@ -2843,10 +2869,10 @@ function App() {
                                 onClick={() => {
                                   const newName = prompt('Novo nome:', cat.name);
                                   if (newName && newName.trim()) {
-                                    const updatedCategories = categories.map(c => c.id === cat.id ? {...c, name: newName.trim()} : c);
+                                    const updatedCategories = latestDataRef.current.categories.map(c => c.id === cat.id ? {...c, name: newName.trim()} : c);
                                     setCategories(updatedCategories);
                                     // Update items that use this category
-                                    const updatedItems = items.map(item => 
+                                    const updatedItems = latestDataRef.current.items.map(item => 
                                       item.category === cat.id ? {...item, category: cat.id} : item
                                     );
                                     setItems(updatedItems);
@@ -2867,23 +2893,25 @@ function App() {
                               <button 
                                 onClick={() => {
                                   // Check if category is being used by any items
-                                  const itemsUsingCategory = items.filter(item => item.category === cat.id);
+                                  const currentItems = latestDataRef.current.items;
+                                  const currentCategories = latestDataRef.current.categories;
+                                  const itemsUsingCategory = currentItems.filter(item => item.category === cat.id);
                                   
                                   if (itemsUsingCategory.length > 0) {
                                     const itemCount = itemsUsingCategory.length;
                                     // Find first available category (not the one being deleted)
-                                    const firstAvailableCategory = categories.find(c => c.id !== cat.id);
+                                    const firstAvailableCategory = currentCategories.find(c => c.id !== cat.id);
                                     
                                     if (firstAvailableCategory) {
                                       const confirmMessage = `Esta categoria está sendo usada por ${itemCount} item(ns) no cardápio.\n\nDeseja realmente excluir?\n\nOs itens serão movidos para a categoria "${firstAvailableCategory.name}".`;
                                       
                                       if (window.confirm(confirmMessage)) {
                                         // Remove category and update items
-                                        const updatedCategories = categories.filter(c => c.id !== cat.id);
+                                        const updatedCategories = currentCategories.filter(c => c.id !== cat.id);
                                         setCategories(updatedCategories);
                                         
                                         // Move items to first available category
-                                        const updatedItems = items.map(item => 
+                                        const updatedItems = currentItems.map(item => 
                                           item.category === cat.id ? {...item, category: firstAvailableCategory.id} : item
                                         );
                                         setItems(updatedItems);
@@ -2903,11 +2931,11 @@ function App() {
                                       if (window.confirm(confirmMessage)) {
                                         // Create default category
                                         const defaultCategory = { id: generateId(), name: 'Sem Categoria' };
-                                        const updatedCategories = [defaultCategory, ...categories.filter(c => c.id !== cat.id)];
+                                        const updatedCategories = [defaultCategory, ...currentCategories.filter(c => c.id !== cat.id)];
                                         setCategories(updatedCategories);
                                         
                                         // Move items to default category
-                                        const updatedItems = items.map(item => 
+                                        const updatedItems = currentItems.map(item => 
                                           item.category === cat.id ? {...item, category: defaultCategory.id} : item
                                         );
                                         setItems(updatedItems);
@@ -2924,7 +2952,7 @@ function App() {
                                   } else {
                                     // No items using this category, safe to delete
                                     if (window.confirm(`Deseja realmente excluir a categoria "${cat.name}"?`)) {
-                                      const updatedCategories = categories.filter(c => c.id !== cat.id);
+                                      const updatedCategories = currentCategories.filter(c => c.id !== cat.id);
                                       setCategories(updatedCategories);
                                       // Auto-save to localStorage
                                       try {
@@ -4154,24 +4182,24 @@ function App() {
               animate={{ x: 0 }} 
               exit={{ x: "100%" }} 
               transition={{ type: "spring", damping: 30, stiffness: 300 }}
-              className="relative w-full max-w-xl bg-white h-full sm:h-auto sm:max-h-[90vh] sm:rounded-[3rem] flex flex-col shadow-2xl overflow-hidden border-l border-white/20"
+              className="relative flex h-full w-full max-w-xl flex-col overflow-hidden border-l border-white/20 bg-white shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-[3rem]"
             >
-              <div className="p-10 border-b border-stone-100 flex items-center justify-between bg-stone-50/50 flex-shrink-0">
-                <div className="flex items-center gap-6">
-                  <div className="w-14 h-14 bg-orange-700 rounded-2xl flex items-center justify-center text-white shadow-xl rotate-3">
+              <div className="flex flex-shrink-0 items-center justify-between border-b border-stone-100 bg-stone-50/50 px-5 py-5 sm:p-10">
+                <div className="flex min-w-0 items-center gap-4 sm:gap-6">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-orange-700 text-white shadow-xl sm:h-14 sm:w-14 sm:rotate-3">
                     <ShoppingCart size={28} />
                   </div>
-                  <h3 className="text-3xl font-black text-stone-900 tracking-tighter">Seu Pedido</h3>
+                  <h3 className="truncate text-2xl font-black tracking-tighter text-stone-900 sm:text-3xl">Seu Pedido</h3>
                 </div>
                 <button 
                   onClick={() => setIsCartOpen(false)} 
-                  className="w-12 h-12 bg-white hover:bg-red-50 text-stone-300 hover:text-red-500 rounded-2xl transition-all shadow-lg flex items-center justify-center"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-stone-300 shadow-lg transition-all hover:bg-red-50 hover:text-red-500 sm:h-12 sm:w-12"
                 >
                   <X size={24} />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-10 space-y-6 custom-scrollbar min-h-0">
+              <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5 custom-scrollbar sm:p-10">
                 {cart.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center py-20">
                     <div className="w-24 h-24 bg-stone-50 text-stone-200 rounded-[2rem] flex items-center justify-center mb-8">
@@ -4202,7 +4230,7 @@ function App() {
               </div>
 
               {cart.length > 0 && (
-                <div className="p-10 bg-stone-50 border-t border-stone-100 space-y-8 flex-shrink-0 overflow-y-auto max-h-[50vh]">
+                <div className="max-h-[50vh] flex-shrink-0 space-y-6 overflow-y-auto border-t border-stone-100 bg-stone-50 px-5 py-5 sm:max-h-[55vh] sm:space-y-8 sm:p-10">
                   <div className="space-y-4">
                     <div className="flex justify-between items-center text-stone-400 font-bold uppercase text-[10px] tracking-[0.2em]">
                       <span>Subtotal</span>
@@ -4307,7 +4335,7 @@ function App() {
       {/* Order Confirmation Modal */}
       <AnimatePresence>
         {orderConfirmation && (
-          <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 overflow-y-auto">
+          <div className="fixed inset-0 z-[400] flex items-center justify-center p-2 sm:p-4">
             <motion.div 
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
@@ -4320,26 +4348,26 @@ function App() {
               animate={{ scale: 1, opacity: 1, y: 0 }} 
               exit={{ scale: 0.9, opacity: 0, y: 20 }} 
               onClick={(e) => e.stopPropagation()}
-              className="relative w-full max-w-2xl bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-white/20"
+              className="relative flex h-[calc(100vh-1rem)] max-h-[920px] w-full max-w-2xl flex-col overflow-hidden rounded-[2rem] border border-white/20 bg-white shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-[3rem]"
             >
-              <div className="p-12 text-center bg-gradient-to-br from-green-50 to-orange-50 border-b border-stone-100">
+              <div className="shrink-0 border-b border-stone-100 bg-gradient-to-br from-green-50 to-orange-50 px-5 py-8 text-center sm:p-12">
                 <motion.div
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
                   transition={{ delay: 0.2, type: "spring" }}
-                  className="w-24 h-24 bg-green-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-green-600/30"
+                  className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-green-600 shadow-2xl shadow-green-600/30 sm:h-24 sm:w-24"
                 >
                   <CheckCircle size={48} className="text-white" strokeWidth={2.5} />
                 </motion.div>
-                <h3 className="text-4xl font-black text-stone-900 tracking-tighter mb-3">
+                <h3 className="mb-3 text-3xl font-black tracking-tighter text-stone-900 sm:text-4xl">
                   Pedido Confirmado!
                 </h3>
-                <p className="text-stone-600 font-bold text-lg">
+                <p className="text-base font-bold text-stone-600 sm:text-lg">
                   Pedido #{orderConfirmation.id}
                 </p>
               </div>
 
-              <div className="p-12 space-y-8">
+              <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5 sm:space-y-8 sm:p-12">
                 <div className="bg-stone-50 rounded-[2rem] p-8 border border-stone-100">
                   <h4 className="font-black text-stone-900 mb-6 uppercase tracking-widest text-xs">Resumo do Pedido</h4>
                   <div className="space-y-4">
@@ -4391,7 +4419,8 @@ function App() {
                   </p>
                 </div>
 
-                <div className="flex gap-4">
+                <div className="sticky bottom-0 -mx-5 border-t border-stone-100 bg-white/95 px-5 pt-4 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:pt-0">
+                <div className="flex gap-3 sm:gap-4">
                   <button 
                     onClick={() => setOrderConfirmation(null)}
                     className="flex-1 bg-stone-200 hover:bg-stone-300 text-stone-700 font-black py-5 rounded-[1.5rem] uppercase text-xs tracking-widest transition-all"
@@ -4408,6 +4437,7 @@ function App() {
                     Ver Cardápio
                   </button>
                 </div>
+                </div>
               </div>
             </motion.div>
           </div>
@@ -4417,7 +4447,7 @@ function App() {
       {/* New Item Modal */}
       <AnimatePresence>
         {isNewItemModalOpen && (
-          <div className="fixed inset-0 z-[500] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[500] flex items-center justify-center p-2 sm:p-4">
             <motion.div 
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
@@ -4433,15 +4463,15 @@ function App() {
               animate={{ scale: 1, opacity: 1, y: 0 }} 
               exit={{ scale: 0.9, opacity: 0, y: 20 }} 
               onClick={(e) => e.stopPropagation()}
-              className="relative w-full max-w-2xl bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-white/20"
+              className="relative flex h-[calc(100vh-1rem)] max-h-[920px] w-full max-w-2xl flex-col overflow-hidden rounded-[2rem] border border-white/20 bg-white shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-[3rem]"
             >
-              <div className="p-10 border-b border-stone-100 flex items-center justify-between bg-stone-50/50">
-                <div className="flex items-center gap-6">
-                  <div className="w-16 h-16 bg-orange-700 rounded-3xl flex items-center justify-center text-white shadow-2xl rotate-3">
+              <div className="flex shrink-0 items-center justify-between border-b border-stone-100 bg-stone-50/50 px-5 py-5 sm:p-10">
+                <div className="flex min-w-0 items-center gap-4 sm:gap-6">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-orange-700 text-white shadow-2xl sm:h-16 sm:w-16 sm:rounded-3xl sm:rotate-3">
                     <Plus size={32} />
                   </div>
-                  <div>
-                    <h3 className="text-4xl font-black text-stone-900 tracking-tighter">{editingItemId ? 'Editar Item' : 'Novo Item'}</h3>
+                  <div className="min-w-0">
+                    <h3 className="text-2xl font-black tracking-tighter text-stone-900 sm:text-4xl">{editingItemId ? 'Editar Item' : 'Novo Item'}</h3>
                     <p className="text-stone-400 font-bold uppercase text-[10px] tracking-widest mt-1">
                       {editingItemId ? 'Atualize o produto completo' : 'Adicionar ao Cardápio'}
                     </p>
@@ -4452,13 +4482,14 @@ function App() {
                     setEditingItemId(null);
                     setIsNewItemModalOpen(false);
                   }} 
-                  className="w-14 h-14 bg-white hover:bg-red-50 text-stone-400 hover:text-red-500 rounded-2xl transition-all shadow-xl flex items-center justify-center active:scale-90"
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white text-stone-400 shadow-xl transition-all hover:bg-red-50 hover:text-red-500 active:scale-90 sm:h-14 sm:w-14"
                 >
-                  <X size={28} />
+                  <X size={24} />
                 </button>
               </div>
 
-              <div className="p-10 space-y-6">
+              <div className="flex-1 overflow-y-auto px-5 py-5 sm:p-10">
+                <div className="space-y-6 pb-4">
                 <div className="space-y-4">
                   <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">Nome do Item</label>
                   <input 
@@ -4572,20 +4603,23 @@ function App() {
                     </div>
                     <button
                       onClick={() => {
-                        const currentItem = items.find(item => item.id === editingItemId);
-                        if (!currentItem) return;
-                        setItems(items.map(item =>
-                          item.id === editingItemId ? { ...item, available: !item.available } : item
-                        ));
+                        setNewItemForm(prev => ({ ...prev, available: !prev.available }));
                       }}
-                      className={`relative h-8 w-14 rounded-full transition-all ${items.find(item => item.id === editingItemId)?.available ? 'bg-green-500 shadow-lg shadow-green-500/20' : 'bg-stone-200'}`}
+                      className={`relative h-8 w-14 rounded-full transition-all ${newItemForm.available ? 'bg-green-500 shadow-lg shadow-green-500/20' : 'bg-stone-200'}`}
                     >
-                      <div className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow-md transition-all ${items.find(item => item.id === editingItemId)?.available ? 'left-7' : 'left-1'}`} />
+                      <div className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow-md transition-all ${newItemForm.available ? 'left-7' : 'left-1'}`} />
                     </button>
                   </div>
                 )}
 
-                <div className="flex gap-4 pt-6">
+                </div>
+              </div>
+
+              <div className="shrink-0 border-t border-stone-100 bg-white/95 px-5 py-4 backdrop-blur sm:px-10 sm:py-6">
+                <div className="mb-3 text-[10px] font-bold uppercase tracking-widest text-stone-400 sm:hidden">
+                  Role o conteudo acima para ver todos os campos.
+                </div>
+                <div className="flex gap-3 sm:gap-4">
                   <button 
                     onClick={() => {
                       setEditingItemId(null);
@@ -4603,18 +4637,21 @@ function App() {
                       }
                       const parsedPrice = parseFloat(newItemForm.price.replace(',', '.')) || 0;
                       if (editingItemId) {
-                        setItems(items.map(item =>
-                          item.id === editingItemId
-                            ? {
-                                ...item,
-                                name: newItemForm.name,
-                                price: parsedPrice,
-                                description: newItemForm.description || 'Item especial da casa...',
-                                category: newItemForm.category,
-                                image: newItemForm.image || undefined,
-                              }
-                            : item
-                        ));
+                        setItems(prevItems =>
+                          prevItems.map(item =>
+                            item.id === editingItemId
+                              ? {
+                                  ...item,
+                                  name: newItemForm.name,
+                                  price: parsedPrice,
+                                  description: newItemForm.description || 'Item especial da casa...',
+                                  category: newItemForm.category,
+                                  image: newItemForm.image || undefined,
+                                  available: newItemForm.available,
+                                }
+                              : item
+                          )
+                        );
                       } else {
                         const newItem: MenuItem = {
                           id: generateId(),
@@ -4623,11 +4660,11 @@ function App() {
                           description: newItemForm.description || 'Item especial da casa...',
                           category: newItemForm.category,
                           image: newItemForm.image || undefined,
-                          available: true
+                          available: newItemForm.available
                         };
-                        setItems([...items, newItem]);
+                        setItems(prevItems => [...prevItems, newItem]);
                       }
-                      setNewItemForm({ name: '', price: '', description: '', category: categories[0]?.id || '', image: '' });
+                      setNewItemForm({ name: '', price: '', description: '', category: categories[0]?.id || '', image: '', available: true });
                       setEditingItemId(null);
                       setIsNewItemModalOpen(false);
                     }}

@@ -21,6 +21,15 @@ Copie `.env.example` para `.env` e preencha:
 - `WA360_API_URL`: URL da API da 360dialog (padrao `https://waba-v2.360dialog.io/messages`).
 - `ALLOWED_ORIGIN`: origem permitida por CORS na API.
 
+### Producao na Vercel
+
+- `VITE_ADMIN_API_TOKEN` e `ADMIN_API_TOKEN` precisam ter exatamente o mesmo valor.
+- `VITE_NOTIFY_API_TOKEN` e `NOTIFY_API_TOKEN` precisam ter exatamente o mesmo valor.
+- `ALLOWED_ORIGIN` em producao deve apontar para o dominio publicado.
+  Exemplo: `https://saborcaseiro.vercel.app`
+- Evite colar valores com aspas, espacos extras ou quebra de linha no final.
+- Sempre que alterar variaveis de ambiente na Vercel, faca um novo deploy para aplicar.
+
 ## Scripts
 
 - `npm run dev`: desenvolvimento local.
@@ -37,3 +46,26 @@ Existe workflow em `.github/workflows/ci.yml` com:
 2. `npm run lint`
 3. `npm run test:run`
 4. `npm run build`
+
+## Checklist de sincronizacao
+
+1. Abra o site publicado.
+2. Entre no painel administrativo.
+3. Faca uma alteracao pequena.
+4. Clique em sincronizar.
+5. Confira o endpoint `/api/data`.
+
+Se a sincronizacao estiver correta, o retorno deve conter:
+
+- `success: true`
+- `lastUpdated` preenchido
+- `categories`, `items` e `settings` com dados
+
+## Diagnostico rapido
+
+- `401 Unauthorized`
+  Tokens do frontend e backend nao batem, ou ha espaco/quebra de linha no valor da variavel.
+- `FUNCTION_INVOCATION_FAILED`
+  A Function da Vercel falhou antes de responder. Verifique os logs da Function.
+- `Unexpected token ... is not valid JSON`
+  O frontend tentou ler JSON, mas a API devolveu HTML ou texto de erro.

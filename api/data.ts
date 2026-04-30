@@ -27,7 +27,39 @@ type ApiResponse = {
 };
 
 const DATA_FILE_PATH = '/tmp/minas-data.json';
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? '*';
+
+const parseAllowedOrigins = (rawValue: string | undefined) => {
+  if (!rawValue) return ['*'];
+
+  const normalized = rawValue
+    .split(',')
+    .map((value) => value.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+    .filter((value) => !/[\r\n]/.test(value));
+
+  const validOrigins = normalized.filter((value) => {
+    if (value === '*') return true;
+    try {
+      return new URL(value).origin === value;
+    } catch {
+      return false;
+    }
+  });
+
+  return validOrigins.length > 0 ? validOrigins : ['*'];
+};
+
+const resolveAllowedOrigin = (requestOrigin: string | string[] | undefined) => {
+  const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGIN);
+  if (allowedOrigins.includes('*')) return '*';
+
+  const origin = Array.isArray(requestOrigin) ? requestOrigin[0] : requestOrigin;
+  if (origin && allowedOrigins.includes(origin)) {
+    return origin;
+  }
+
+  return allowedOrigins[0];
+};
 
 const readDataStore = async (): Promise<PersistedData> => {
   try {
@@ -47,7 +79,7 @@ export default async function handler(
   res: ApiResponse,
 ) {
   // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  res.setHeader('Access-Control-Allow-Origin', resolveAllowedOrigin(req.headers.origin));
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-token');
 

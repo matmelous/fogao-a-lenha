@@ -21,7 +21,38 @@ type ApiResponse = {
   end: () => ApiResponse;
 };
 
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? '*';
+const parseAllowedOrigins = (rawValue: string | undefined) => {
+  if (!rawValue) return ['*'];
+
+  const normalized = rawValue
+    .split(',')
+    .map((value) => value.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+    .filter((value) => !/[\r\n]/.test(value));
+
+  const validOrigins = normalized.filter((value) => {
+    if (value === '*') return true;
+    try {
+      return new URL(value).origin === value;
+    } catch {
+      return false;
+    }
+  });
+
+  return validOrigins.length > 0 ? validOrigins : ['*'];
+};
+
+const resolveAllowedOrigin = (requestOrigin: string | string[] | undefined) => {
+  const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGIN);
+  if (allowedOrigins.includes('*')) return '*';
+
+  const origin = Array.isArray(requestOrigin) ? requestOrigin[0] : requestOrigin;
+  if (origin && allowedOrigins.includes(origin)) {
+    return origin;
+  }
+
+  return allowedOrigins[0];
+};
 
 const buildOrderMessage = (order: OrderPayload) => {
   const itemsList = (order.items || [])
@@ -46,7 +77,7 @@ const buildOrderMessage = (order: OrderPayload) => {
 };
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  res.setHeader('Access-Control-Allow-Origin', resolveAllowedOrigin(req.headers.origin));
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-notify-token');
 

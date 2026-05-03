@@ -24,4 +24,5 @@ export const tenantStorageKeys = {
   backup: buildTenantStorageKey(currentTenantId, 'backup'),
   version: buildTenantStorageKey(currentTenantId, 'appVersion'),
   buildTime: buildTenantStorageKey(currentTenantId, 'buildTime'),
+  pendingStripeOrder: buildTenantStorageKey(currentTenantId, 'pendingStripeOrder'),
 };

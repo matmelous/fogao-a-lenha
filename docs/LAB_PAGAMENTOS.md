@@ -36,4 +36,19 @@ O laboratorio ja mostra no checkout:
 - `Google Pay (Teste)`
 - `Aproximação no Celular (Teste)`
 
-Essas opcoes ainda sao de homologacao de experiencia. Elas ajudam a desenhar o fluxo final e a tomada de decisao tecnica.
+## Integracao atual
+
+- `Apple Pay (Teste)` e `Google Pay (Teste)` usam Stripe Checkout.
+- `Aproximação no Celular (Teste)` continua como trilha de estudo para app proprio ou parceiro com suporte nativo.
+
+## Configuracoes necessarias
+
+No admin do tenant `saborcaseiro-lab`:
+
+- preencher `Stripe Token` com a secret key de teste, se preferir guardar pelo painel
+- ou configurar `STRIPE_SECRET_KEY__SABORCASEIRO_LAB` na Vercel
+
+Observacoes:
+
+- Apple Pay e Google Pay dependem de compatibilidade do aparelho, navegador e conta.
+- O Stripe pode exibir carteira digital ou fallback para cartao, dependendo do dispositivo.

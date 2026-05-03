@@ -166,7 +166,6 @@ function App() {
       window.removeEventListener('focus', handleFocus);
     };
   }, []);
-
   // Clean old localStorage keys and check storage usage
   useEffect(() => {
     try {
@@ -353,7 +352,6 @@ function App() {
     window.addEventListener('resize', checkIsDesktop);
     return () => window.removeEventListener('resize', checkIsDesktop);
   }, []);
-
   useEffect(() => {
     if (!isDesktop) return;
     if (window.location.pathname !== '/acesso-admin') return;
@@ -372,7 +370,6 @@ function App() {
       }
     };
   }, []);
-  
   const [cart, setCart] = useState<{ item: MenuItem; quantity: number }[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
@@ -503,6 +500,10 @@ function App() {
   // Sync functions
   const getApiUrl = () => {
     return `${window.location.origin}/api/data`;
+  };
+
+  const getStripeCheckoutApiUrl = () => {
+    return `${window.location.origin}/api/create-stripe-checkout`;
   };
 
   const getApiAuthHeaders = () => {
@@ -815,7 +816,6 @@ function App() {
       console.error('Error loading sync status:', e);
     }
   }, []);
-
   // Ref to track admin state for the checkCloudUpdates interval
   const isAdminOpenRef = useRef(isAdminOpen);
   useEffect(() => {
@@ -1185,6 +1185,9 @@ function App() {
     await navigator.clipboard.writeText(text);
   };
 
+  const isStripeWalletPaymentMethod = (method: string) =>
+    method === 'Apple Pay (Teste)' || method === 'Google Pay (Teste)';
+
   const getRestaurantWhatsappUrl = (message: string) => {
     const normalizedWhatsapp = settings.whatsapp.replace(/\D/g, '');
     return `https://wa.me/55${normalizedWhatsapp}?text=${encodeURIComponent(message)}`;
@@ -1496,6 +1499,67 @@ function App() {
     if (!validateCheckoutFields()) return;
 
     setSelectedExperimentalPayment(paymentMethod);
+    if (isStripeWalletPaymentMethod(paymentMethod)) {
+      const pendingOrder = buildOrder({
+        paymentStatus: 'pending',
+        status: 'pending',
+      });
+
+      try {
+        sessionStorage.setItem(tenantStorageKeys.pendingStripeOrder, JSON.stringify({
+          order: pendingOrder,
+          paymentMethod,
+        }));
+      } catch (error) {
+        console.error('Erro ao preparar checkout Stripe no laboratório:', error);
+      }
+
+      const successUrl = `${window.location.origin}?tenant=${currentTenantId}&stripe_status=success&wallet=${encodeURIComponent(paymentMethod)}`;
+      const cancelUrl = `${window.location.origin}?tenant=${currentTenantId}&stripe_status=cancelled&wallet=${encodeURIComponent(paymentMethod)}`;
+
+      void (async () => {
+        try {
+          const response = await fetch(getStripeCheckoutApiUrl(), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-tenant-id': currentTenantId,
+            },
+            body: JSON.stringify({
+              orderId: pendingOrder.id,
+              total: pendingOrder.total,
+              customerName: pendingOrder.customerName,
+              customerEmail: customerEmail.trim(),
+              customerPhone: pendingOrder.customerPhone,
+              address: pendingOrder.address,
+              paymentMethod,
+              successUrl,
+              cancelUrl,
+              items: pendingOrder.items,
+            }),
+          });
+
+          const result = await response.json();
+          if (!response.ok || !result.success || !result.checkoutUrl) {
+            throw new Error(
+              result?.error?.message ||
+              'Não foi possível iniciar o checkout Stripe para o laboratório.',
+            );
+          }
+
+          window.location.href = result.checkoutUrl as string;
+        } catch (error) {
+          console.error('Erro ao iniciar Stripe Checkout no laboratório:', error);
+          alert(
+            error instanceof Error
+              ? error.message
+              : 'Não foi possível abrir o checkout experimental.',
+          );
+        }
+      })();
+      return;
+    }
+
     setIsExperimentalPaymentOpen(true);
   };
 
@@ -1660,7 +1724,73 @@ function App() {
     paymentMethod,
     settings.paymentTokens?.mercadoPagoPublicKey,
   ]);
-  /* eslint-enable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const stripeStatus = params.get('stripe_status');
+    const wallet = params.get('wallet') || 'Carteira Digital';
+
+    if (!stripeStatus) return;
+
+    const clearStripeParams = () => {
+      params.delete('stripe_status');
+      params.delete('wallet');
+      const tenantParam = params.get('tenant');
+      const nextQuery = new URLSearchParams();
+      if (tenantParam) {
+        nextQuery.set('tenant', tenantParam);
+      }
+      const nextSearch = nextQuery.toString();
+      window.history.replaceState({}, '', `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}`);
+    };
+
+    try {
+      const stored = sessionStorage.getItem(tenantStorageKeys.pendingStripeOrder);
+      if (!stored) {
+        clearStripeParams();
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as { order?: Order };
+      const pendingOrder = parsed.order;
+
+      if (!pendingOrder) {
+        sessionStorage.removeItem(tenantStorageKeys.pendingStripeOrder);
+        clearStripeParams();
+        return;
+      }
+
+      if (stripeStatus === 'success') {
+        sessionStorage.removeItem(tenantStorageKeys.pendingStripeOrder);
+        void (async () => {
+          await persistOrder(
+            pendingOrder,
+            'new_order',
+            buildOrderWhatsappMessage(pendingOrder, `${wallet} aprovado`),
+          );
+          await finalizeSuccessfulOrder(
+            {
+              ...pendingOrder,
+              paymentMethod: wallet,
+              paymentStatus: 'approved',
+              status: 'preparing',
+            },
+            `${wallet} aprovado`,
+          );
+        })();
+      }
+
+      if (stripeStatus === 'cancelled') {
+        sessionStorage.removeItem(tenantStorageKeys.pendingStripeOrder);
+        alert(`${wallet} foi cancelado no laboratório. Nenhum pedido foi enviado ao restaurante.`);
+      }
+    } catch (error) {
+      console.error('Erro ao retomar checkout Stripe do laboratório:', error);
+    } finally {
+      clearStripeParams();
+    }
+  }, []);
 
   useEffect(() => {
     if (!orders.length) return;
@@ -4997,7 +5127,9 @@ function App() {
 
               <div className="space-y-5 p-6 sm:p-8">
                 <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5 text-sm font-bold leading-relaxed text-amber-900">
-                  Aqui a gente valida o fluxo visual e operacional. A implementação real pode seguir por carteira digital na web ou por app próprio com suporte nativo.
+                  {isStripeWalletPaymentMethod(selectedExperimentalPayment)
+                    ? 'Este fluxo usa Stripe Checkout como laboratório para exibir Apple Pay ou Google Pay em dispositivos compatíveis. A carteira disponível depende do aparelho, navegador e configuração do domínio.'
+                    : 'Aqui a gente valida o fluxo visual e operacional. A implementação real pode seguir por carteira digital na web ou por app próprio com suporte nativo.'}
                 </div>
 
                 <div className="rounded-[2rem] border border-stone-100 bg-stone-50 p-5">
@@ -5018,12 +5150,17 @@ function App() {
                   </button>
                   <button
                     onClick={() => {
+                      if (isStripeWalletPaymentMethod(selectedExperimentalPayment)) {
+                        setIsExperimentalPaymentOpen(false);
+                        void startExperimentalPaymentCheckout();
+                        return;
+                      }
                       setIsExperimentalPaymentOpen(false);
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}
                     className="flex-[1.3] bg-amber-600 hover:bg-amber-700 text-white font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
                   >
-                    Continuar Planejamento
+                    {isStripeWalletPaymentMethod(selectedExperimentalPayment) ? 'Abrir Checkout Stripe' : 'Continuar Planejamento'}
                   </button>
                 </div>
               </div>

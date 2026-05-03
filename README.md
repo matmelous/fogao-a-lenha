@@ -21,6 +21,7 @@ Copie `.env.example` para `.env` e preencha:
 - `WA360_TO_NUMBER`: WhatsApp (com codigo do pais) que recebera alertas de novos pedidos.
 - `WA360_API_URL`: URL da API da 360dialog (padrao `https://waba-v2.360dialog.io/messages`).
 - `MERCADO_PAGO_ACCESS_TOKEN`: access token usado pelo backend para processar pagamentos no cartao.
+- `STRIPE_SECRET_KEY`: secret key usada pelo laboratorio de Apple Pay / Google Pay via Stripe Checkout.
 - `ALLOWED_ORIGIN`: origem permitida por CORS na API.
 
 ### Variaveis por tenant
@@ -33,6 +34,7 @@ Se quiser configurar credenciais ou WhatsApp diferentes por cliente, use o padra
 - `WA360_TO_NUMBER__TENANT_ID`
 - `WA360_API_URL__TENANT_ID`
 - `MERCADO_PAGO_ACCESS_TOKEN__TENANT_ID`
+- `STRIPE_SECRET_KEY__TENANT_ID`
 - `ALLOWED_ORIGIN__TENANT_ID`
 
 Exemplo para o tenant `fogao-a-lenha`:

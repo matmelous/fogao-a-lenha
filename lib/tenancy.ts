@@ -24,7 +24,7 @@ export const tenantConfigs: TenantConfig[] = [
   {
     id: 'saborcaseiro-lab',
     name: 'Sabor Caseiro Lab',
-    domains: ['teste.saborcaseiro.vercel.app', 'lab.saborcaseiro.vercel.app'],
+    domains: ['saborcaseiro-lab.vercel.app', 'teste-saborcaseiro.vercel.app'],
     mode: 'lab',
     experimentalPayments: ['Apple Pay (Teste)', 'Google Pay (Teste)', 'Aproximação no Celular (Teste)'],
   },

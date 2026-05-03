@@ -6,8 +6,8 @@ Este ambiente existe para testar novas experiencias de checkout sem afetar o sit
 
 - `id`: `saborcaseiro-lab`
 - dominios sugeridos:
-  - `teste.saborcaseiro.vercel.app`
-  - `lab.saborcaseiro.vercel.app`
+  - `saborcaseiro-lab.vercel.app`
+  - `teste-saborcaseiro.vercel.app`
 - override local:
   - `http://localhost:5173/?tenant=saborcaseiro-lab`
 

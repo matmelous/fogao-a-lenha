@@ -126,6 +126,9 @@ Para cada cliente, voce pode apontar um dominio proprio para o mesmo projeto pub
 - Tenant padrao: `fogao-a-lenha`
 - Override local: `http://localhost:5173/?tenant=cliente-centro`
 - Laboratorio de pagamentos: `http://localhost:5173/?tenant=saborcaseiro-lab`
+- Aliases publicados do laboratorio:
+  - `https://saborcaseiro-lab.vercel.app`
+  - `https://teste-saborcaseiro.vercel.app`
 - Assim voce consegue testar varios clientes sem precisar de varios deploys.
 
 ## Checklist de sincronizacao

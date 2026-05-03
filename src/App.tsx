@@ -4877,9 +4877,9 @@ function App() {
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.96, opacity: 0, y: 24 }}
               onClick={(e) => e.stopPropagation()}
-              className="relative w-full max-w-3xl overflow-hidden rounded-[2rem] bg-white shadow-2xl"
+              className="relative flex h-[calc(100vh-1rem)] max-h-[920px] w-full max-w-3xl flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl sm:h-auto sm:max-h-[90vh]"
             >
-              <div className="bg-gradient-to-br from-blue-50 to-stone-50 px-6 py-8 sm:px-8">
+              <div className="shrink-0 bg-gradient-to-br from-blue-50 to-stone-50 px-6 py-8 sm:px-8">
                 <p className="text-blue-600 font-black uppercase tracking-[0.25em] text-[11px] mb-2">Pagamento no cartão</p>
                 <h3 className="text-3xl font-black tracking-tighter text-stone-900">Finalize com Mercado Pago</h3>
                 <p className="mt-3 text-stone-600 font-bold leading-relaxed">
@@ -4887,7 +4887,7 @@ function App() {
                 </p>
               </div>
 
-              <div className="p-6 sm:p-8 space-y-5">
+              <div className="flex-1 overflow-y-auto p-6 space-y-5 sm:p-8">
                 <div className="rounded-[2rem] bg-stone-50 border border-stone-100 p-5 space-y-2 text-sm">
                   <p className="font-bold text-stone-700"><span className="text-stone-500">Pedido:</span> #{cardCheckoutOrder.id}</p>
                   <p className="font-bold text-stone-700"><span className="text-stone-500">Cliente:</span> {cardCheckoutOrder.customerName}</p>
@@ -4915,16 +4915,18 @@ function App() {
                   </div>
                 )}
 
-                <button
-                  onClick={() => {
-                    setIsCardPaymentOpen(false);
-                    setCardCheckoutOrder(null);
-                    setCardPaymentError(null);
-                  }}
-                  className="w-full bg-stone-200 hover:bg-stone-300 text-stone-700 font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
-                >
-                  Cancelar
-                </button>
+                <div className="sticky bottom-0 -mx-6 border-t border-stone-100 bg-white/95 px-6 pt-4 backdrop-blur sm:-mx-8 sm:px-8">
+                  <button
+                    onClick={() => {
+                      setIsCardPaymentOpen(false);
+                      setCardCheckoutOrder(null);
+                      setCardPaymentError(null);
+                    }}
+                    className="w-full bg-stone-200 hover:bg-stone-300 text-stone-700 font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
+                  >
+                    Cancelar
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

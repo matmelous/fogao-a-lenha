@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sabor Caseiro | Site de Cardapio para Restaurantes</title>
+    <meta
+      name="description"
+      content="Tenha um site proprio para o seu restaurante e apresente seu cardapio com mais valor, mais confianca e mais profissionalismo."
+    />
+    <style>
+      :root {
+        --bg: #f3eadb;
+        --paper: rgba(255, 252, 246, 0.92);
+        --ink: #241813;
+        --muted: #6b5a50;
+        --line: rgba(82, 52, 36, 0.14);
+        --accent: #b94822;
+        --accent-dark: #8f3415;
+        --forest: #28483c;
+        --shadow: 0 24px 70px rgba(78, 45, 24, 0.11);
+        --radius-xl: 32px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(255, 246, 230, 0.95) 0%, transparent 28%),
+          radial-gradient(circle at top right, rgba(201, 107, 67, 0.10) 0%, transparent 24%),
+          linear-gradient(180deg, #f8f2e9 0%, #f0e3d1 100%);
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      .brand-mark {
+        font-family: Georgia, "Times New Roman", serif;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 28px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        backdrop-filter: blur(18px);
+        background: rgba(247, 239, 227, 0.72);
+        border-bottom: 1px solid rgba(84, 58, 41, 0.08);
+      }
+
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 0;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .brand-badge {
+        width: 44px;
+        height: 44px;
+        border-radius: 15px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, var(--accent) 0%, #cf704a 100%);
+        color: white;
+        font-weight: 800;
+        box-shadow: 0 16px 28px rgba(185, 72, 34, 0.24);
+      }
+
+      .brand-mark {
+        font-size: 22px;
+        letter-spacing: -0.04em;
+      }
+
+      .brand-copy small {
+        display: block;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 11px;
+      }
+
+      .topbar-nav {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .topbar-nav a {
+        text-decoration: none;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 52px;
+        padding: 0 22px;
+        border-radius: 999px;
+        text-decoration: none;
+        border: 1px solid transparent;
+        transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--accent) 0%, #cf6a43 100%);
+        color: white;
+        box-shadow: 0 18px 32px rgba(185, 72, 34, 0.22);
+        -webkit-text-fill-color: white;
+      }
+
+      .btn-secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.68);
+        color: var(--ink);
+      }
+
+      .hero {
+        padding: 46px 0 26px;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 28px;
+        align-items: center;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.75);
+        color: var(--accent-dark);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .hero h1 {
+        margin: 20px 0 16px;
+        font-size: clamp(42px, 7vw, 82px);
+        line-height: 0.92;
+        letter-spacing: -0.05em;
+      }
+
+      .hero p {
+        margin: 0;
+        max-width: 670px;
+        font-size: 20px;
+        line-height: 1.68;
+        color: var(--muted);
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-top: 28px;
+      }
+
+      .hero-note {
+        margin-top: 16px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .surface {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-xl);
+        box-shadow: var(--shadow);
+      }
+
+      .showcase {
+        padding: 20px;
+        transform: rotate(1.6deg);
+      }
+
+      .showcase-frame {
+        overflow: hidden;
+        border-radius: 26px;
+        background: white;
+        border: 1px solid rgba(108, 70, 49, 0.14);
+      }
+
+      .showcase-top {
+        padding: 22px;
+        background:
+          radial-gradient(circle at top right, rgba(255, 255, 255, 0.18) 0%, transparent 26%),
+          linear-gradient(135deg, #2a1e1a 0%, #8b3716 100%);
+        color: white;
+      }
+
+      .showcase-top small {
+        display: inline-block;
+        opacity: 0.84;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        font-size: 11px;
+      }
+
+      .showcase-top h2 {
+        margin: 10px 0 8px;
+        font-size: 34px;
+        letter-spacing: -0.04em;
+      }
+
+      .showcase-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .chip {
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        font-size: 12px;
+      }
+
+      .showcase-body {
+        padding: 18px;
+        background: linear-gradient(180deg, #fff9f3 0%, #fffefc 100%);
+      }
+
+      .menu-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 18px;
+        padding: 16px;
+        border-radius: 18px;
+        background: white;
+        border: 1px solid rgba(96, 64, 47, 0.10);
+      }
+
+      .menu-row + .menu-row {
+        margin-top: 12px;
+      }
+
+      .menu-row p {
+        margin: 6px 0 0;
+        font-size: 14px;
+      }
+
+      .price {
+        font-weight: 800;
+        color: var(--accent-dark);
+        white-space: nowrap;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin: 22px 0 0;
+      }
+
+      .stat {
+        padding: 18px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.65);
+        border: 1px solid var(--line);
+      }
+
+      .stat strong {
+        display: block;
+        font-size: 28px;
+        letter-spacing: -0.05em;
+      }
+
+      .section {
+        padding: 30px 0;
+      }
+
+      .section-head {
+        max-width: 720px;
+        margin-bottom: 20px;
+      }
+
+      .section-head h2 {
+        margin: 0 0 12px;
+        font-size: clamp(30px, 5vw, 54px);
+        letter-spacing: -0.05em;
+      }
+
+      .section-head p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .grid-3,
+      .grid-4 {
+        display: grid;
+        gap: 18px;
+      }
+
+      .grid-3 {
+        grid-template-columns: repeat(3, 1fr);
+      }
+
+      .grid-4 {
+        grid-template-columns: repeat(4, 1fr);
+      }
+
+      .card {
+        padding: 24px;
+      }
+
+      .card h3,
+      .card h4 {
+        margin: 0 0 12px;
+        letter-spacing: -0.03em;
+      }
+
+      .card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .mini-label {
+        display: inline-block;
+        margin-bottom: 12px;
+        color: var(--accent-dark);
+        text-transform: uppercase;
+        letter-spacing: 0.13em;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .pricing {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+      }
+
+      .plan {
+        padding: 28px;
+      }
+
+      .plan.highlight {
+        background:
+          radial-gradient(circle at top right, rgba(185, 72, 34, 0.10) 0%, transparent 26%),
+          var(--paper);
+        transform: translateY(-8px);
+      }
+
+      .plan h3 {
+        margin: 0 0 8px;
+        font-size: 30px;
+      }
+
+      .price-tag {
+        margin: 10px 0 18px;
+        font-size: 15px;
+        color: var(--muted);
+      }
+
+      .plan ul,
+      .steps ol {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        line-height: 1.85;
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: 0.95fr 1.05fr;
+        gap: 18px;
+      }
+
+      .contact-band {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 18px;
+        align-items: center;
+        padding: 34px;
+        margin: 36px 0 70px;
+        background:
+          radial-gradient(circle at top right, rgba(255, 255, 255, 0.16) 0%, transparent 22%),
+          linear-gradient(135deg, #20382f 0%, #2e5647 100%);
+        color: white;
+        border-radius: 34px;
+        box-shadow: 0 28px 64px rgba(32, 56, 47, 0.24);
+      }
+
+      .contact-band p {
+        color: rgba(255, 255, 255, 0.82);
+        margin: 0;
+      }
+
+      .contact-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .contact-pill {
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        font-size: 13px;
+      }
+
+      .footer {
+        padding: 0 0 42px;
+        color: var(--muted);
+        font-size: 13px;
+        text-align: center;
+      }
+
+      .footer strong {
+        color: var(--ink);
+      }
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .grid-3,
+        .grid-4,
+        .pricing,
+        .steps,
+        .contact-band {
+          grid-template-columns: 1fr;
+        }
+
+        .showcase {
+          transform: none;
+        }
+
+        .plan.highlight {
+          transform: none;
+        }
+
+        .stats {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar-inner,
+        .topbar-nav {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      window.MINAS_WL_CONFIG = {
+        brandName: "Sabor Caseiro",
+        whatsappNumber: "5542991628586",
+        whatsappLabel: "(42) 99162-8586",
+        email: "",
+        instagram: "",
+        setupFee: "R$ 300,00",
+        essentialPrice: "R$ 150,00/mês",
+        professionalPrice: "R$ 250,00/mês",
+        premiumPrice: "R$ 400,00/mês",
+      };
+    </script>
+
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <div class="brand">
+          <div class="brand-badge">SC</div>
+          <div class="brand-copy">
+            <small>Site para restaurantes</small>
+            <div class="brand-mark" data-brand-name>Sabor Caseiro</div>
+          </div>
+        </div>
+
+        <nav class="topbar-nav">
+          <a href="#solucao">Vantagens</a>
+          <a href="#planos">Planos</a>
+          <a href="#implantacao">Como funciona</a>
+          <a class="btn btn-primary" data-whatsapp-link href="https://wa.me/5542991628586">Pedir atendimento</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-grid">
+          <div>
+            <span class="eyebrow">Cardapio digital, marca propria e mais presenca online</span>
+            <h1>Transforme a imagem do seu restaurante em um site que desperta vontade de pedir.</h1>
+            <p>
+              Seu cliente come primeiro com os olhos. Um site proprio, bonito e organizado
+              valoriza seus pratos, fortalece sua marca e faz seu restaurante parecer muito
+              mais profissional para quem esta escolhendo onde pedir.
+            </p>
+
+            <div class="hero-actions">
+              <a class="btn btn-primary" data-whatsapp-link href="https://wa.me/5542991628586">Quero valorizar meu restaurante</a>
+              <a class="btn btn-secondary" href="#planos">Ver investimento</a>
+            </div>
+
+            <div class="hero-note">
+              Ideal para quem quer parar de improvisar, apresentar melhor o cardapio e
+              transmitir mais qualidade logo no primeiro contato.
+            </div>
+
+            <div class="stats">
+              <div class="stat">
+                <strong>Mais desejo</strong>
+                <span>na forma como seus pratos sao apresentados</span>
+              </div>
+              <div class="stat">
+                <strong>Mais valor</strong>
+                <span>percebido na sua marca</span>
+              </div>
+              <div class="stat">
+                <strong>Mais controle</strong>
+                <span>sobre o que o cliente ve e como encontra voce</span>
+              </div>
+            </div>
+          </div>
+
+          <aside class="surface showcase">
+            <div class="showcase-frame">
+              <div class="showcase-top">
+                <small>Exemplo do seu futuro site</small>
+                <h2>Fogao da Vila</h2>
+                <div class="showcase-meta">
+                  <span class="chip">Marca propria</span>
+                  <span class="chip">Cardapio online</span>
+                  <span class="chip">Apresentacao profissional</span>
+                </div>
+              </div>
+
+              <div class="showcase-body">
+                <div class="menu-row">
+                  <div>
+                    <strong>Feijoada completa</strong>
+                    <p>Mostre seus pratos com mais valor, mais desejo e mais cuidado visual.</p>
+                  </div>
+                  <div class="price">R$ 45,90</div>
+                </div>
+                <div class="menu-row">
+                  <div>
+                    <strong>Frango com quiabo</strong>
+                    <p>Seu cliente encontra seu cardapio com facilidade e percebe mais qualidade.</p>
+                  </div>
+                  <div class="price">R$ 42,00</div>
+                </div>
+                <div class="menu-row">
+                  <div>
+                    <strong>Pao de queijo recheado</strong>
+                    <p>Uma vitrine digital melhor ajuda sua marca a parecer mais forte e mais confiavel.</p>
+                  </div>
+                  <div class="price">R$ 22,00</div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" id="solucao">
+        <div class="section-head">
+          <h2>Quando a apresentacao muda, a percepcao de valor tambem muda.</h2>
+          <p>
+            Muitos restaurantes vendem bons produtos, mas se apresentam mal no digital.
+            Um site proprio bem montado ajuda voce a parecer mais confiavel, mais caprichoso
+            e mais preparado para atender.
+          </p>
+        </div>
+
+        <div class="grid-3">
+          <article class="surface card">
+            <span class="mini-label">Primeira impressao</span>
+            <h3>Sua marca parece mais forte</h3>
+            <p>
+              Antes mesmo de falar com voce, o cliente ja percebe mais organizacao, mais
+              cuidado e mais profissionalismo.
+            </p>
+          </article>
+
+          <article class="surface card">
+            <span class="mini-label">Mais clareza</span>
+            <h3>Seu cardapio fica mais facil de escolher</h3>
+            <p>
+              Um cardapio claro, bonito e objetivo reduz duvidas e ajuda o cliente a chegar
+              mais rapido na decisao.
+            </p>
+          </article>
+
+          <article class="surface card">
+            <span class="mini-label">Mais conversao</span>
+            <h3>Mais chances de virar atendimento</h3>
+            <p>
+              Quando o visual transmite qualidade, o cliente sente mais seguranca para
+              chamar, perguntar e pedir.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>O que seu restaurante ganha com isso.</h2>
+          <p>
+            Nao se trata apenas de estar na internet. Trata-se de mostrar melhor o que voce
+            vende e fazer sua operacao parecer mais madura e mais confiavel.
+          </p>
+        </div>
+
+        <div class="grid-4">
+          <article class="surface card">
+            <h4>Site proprio</h4>
+            <p>Um endereco proprio para divulgar sua marca com mais autoridade e menos improviso.</p>
+          </article>
+          <article class="surface card">
+            <h4>Cardapio online</h4>
+            <p>Itens, categorias, precos e imagens organizados para dar vontade de explorar e pedir.</p>
+          </article>
+          <article class="surface card">
+            <h4>Configuracao operacional</h4>
+            <p>Horario, taxa de entrega, pedido minimo, formas de pagamento e contatos em um so lugar.</p>
+          </article>
+          <article class="surface card">
+            <h4>Atendimento mais claro</h4>
+            <p>Mais praticidade para conduzir o contato do cliente com uma estrutura mais profissional.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="planos">
+        <div class="section-head">
+          <h2>Escolha o formato ideal para colocar seu restaurante em outro nivel.</h2>
+          <p>
+            Voce pode comecar de forma enxuta ou investir em uma apresentacao mais completa.
+            O importante e nao continuar invisivel ou mal apresentado no digital.
+          </p>
+        </div>
+
+        <div class="pricing">
+          <article class="surface plan">
+            <span class="mini-label">Essencial</span>
+            <h3>Comece com presenca</h3>
+            <div class="price-tag">
+              Implantacao <strong data-setup-fee>R$ 300,00</strong> + <strong data-essential-price>R$ 150,00/mês</strong>
+            </div>
+            <ul>
+              <li>1 site publicado</li>
+              <li>identidade do restaurante no site</li>
+              <li>cardapio inicial bem organizado</li>
+              <li>painel administrativo</li>
+              <li>configuracao inicial</li>
+            </ul>
+          </article>
+
+          <article class="surface plan highlight">
+            <span class="mini-label">Profissional</span>
+            <h3>Mais valor percebido</h3>
+            <div class="price-tag">
+              Implantacao <strong data-setup-fee>R$ 300,00</strong> + <strong data-professional-price>R$ 250,00/mês</strong>
+            </div>
+            <ul>
+              <li>visual mais refinado</li>
+              <li>pedido minimo, taxa e horarios</li>
+              <li>mais ajustes na implantacao</li>
+              <li>estrutura mais completa do cardapio</li>
+              <li>suporte inicial</li>
+            </ul>
+          </article>
+
+          <article class="surface plan">
+            <span class="mini-label">Premium</span>
+            <h3>Mais impacto na sua marca</h3>
+            <div class="price-tag">
+              Implantacao <strong data-setup-fee>R$ 300,00</strong> + <strong data-premium-price>R$ 400,00/mês</strong>
+            </div>
+            <ul>
+              <li>prioridade no atendimento</li>
+              <li>mais ciclos de ajuste</li>
+              <li>implantacao acompanhada</li>
+              <li>melhor nivel de personalizacao</li>
+              <li>mais apoio no inicio da operacao</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="implantacao">
+        <div class="steps">
+          <div class="section-head">
+            <h2>Do material bruto a uma vitrine digital mais forte.</h2>
+            <p>
+              Voce envia as informacoes principais e o resto e organizado para transformar
+              seu cardapio em uma apresentacao mais bonita e mais profissional.
+            </p>
+          </div>
+
+          <article class="surface card steps">
+            <ol>
+              <li>Voce envia logo, cardapio, contatos e informacoes principais.</li>
+              <li>O site e montado com a cara do seu restaurante.</li>
+              <li>O cardapio e organizado para ficar claro, bonito e atrativo.</li>
+              <li>Os detalhes finais sao revisados antes da entrega.</li>
+              <li>Seu link fica pronto para divulgar e usar no dia a dia.</li>
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      <section class="contact-band">
+        <div>
+          <h2 style="margin:0 0 10px; font-size: clamp(32px, 5vw, 54px); letter-spacing:-0.05em;">
+            Seu restaurante pode parecer muito mais valioso ja no primeiro clique.
+          </h2>
+          <p>
+            Se voce sente que seu negocio merece uma apresentacao melhor, esta e a hora de
+            colocar sua marca em um ambiente mais bonito, mais forte e mais convincente.
+          </p>
+          <div class="contact-list">
+            <span class="contact-pill" data-contact-email>contato@minaswhitelabel.com.br</span>
+            <span class="contact-pill" data-contact-whatsapp>(42) 99162-8586</span>
+            <span class="contact-pill" data-contact-instagram>@minas.whitelabel</span>
+          </div>
+        </div>
+
+        <div>
+          <a class="btn btn-primary" href="https://saborcaseiro.vercel.app">Quero conhecer o site</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <strong>Sabor Caseiro</strong> cria sites de cardapio para restaurantes, pizzarias e lanchonetes que querem parecer mais profissionais e despertar mais vontade de pedir.
+    </footer>
+
+    <script>
+      (() => {
+        const config = window.MINAS_WL_CONFIG || {};
+        const brandName = config.brandName || "Sabor Caseiro";
+        const whatsappNumber = config.whatsappNumber || "5542991628586";
+        const whatsappLabel = config.whatsappLabel || "(42) 99162-8586";
+        const email = config.email || "";
+        const instagram = config.instagram || "";
+        const setupFee = config.setupFee || "R$ 300,00";
+        const essentialPrice = config.essentialPrice || "R$ 150,00/mês";
+        const professionalPrice = config.professionalPrice || "R$ 250,00/mês";
+        const premiumPrice = config.premiumPrice || "R$ 400,00/mês";
+
+        document.querySelectorAll("[data-brand-name]").forEach((node) => {
+          node.textContent = brandName;
+        });
+
+        document.querySelectorAll("[data-whatsapp-link]").forEach((node) => {
+          node.setAttribute("href", `https://wa.me/${whatsappNumber}`);
+        });
+
+        document.querySelectorAll("[data-setup-fee]").forEach((node) => {
+          node.textContent = setupFee;
+        });
+
+        document.querySelectorAll("[data-essential-price]").forEach((node) => {
+          node.textContent = essentialPrice;
+        });
+
+        document.querySelectorAll("[data-professional-price]").forEach((node) => {
+          node.textContent = professionalPrice;
+        });
+
+        document.querySelectorAll("[data-premium-price]").forEach((node) => {
+          node.textContent = premiumPrice;
+        });
+
+        const emailNode = document.querySelector("[data-contact-email]");
+        if (emailNode) {
+          if (email) {
+            emailNode.textContent = email;
+          } else {
+            emailNode.remove();
+          }
+        }
+
+        const whatsappNode = document.querySelector("[data-contact-whatsapp]");
+        if (whatsappNode) {
+          whatsappNode.textContent = whatsappLabel;
+        }
+
+        const instagramNode = document.querySelector("[data-contact-instagram]");
+        if (instagramNode) {
+          if (instagram) {
+            instagramNode.textContent = instagram;
+          } else {
+            instagramNode.remove();
+          }
+        }
+      })();
+    </script>
+  </body>
+</html>

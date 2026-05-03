@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Downloads | Do Santos Market</title>
+    <style>
+      :root {
+        --bg: #f5ecdf;
+        --paper: #fffaf3;
+        --ink: #231913;
+        --muted: #6f5f55;
+        --line: rgba(82, 52, 36, 0.12);
+        --accent: #b94822;
+        --accent-dark: #8f3415;
+        --forest: #1f3c31;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(255, 245, 230, 0.95) 0%, transparent 30%),
+          linear-gradient(180deg, #f9f3ea 0%, #f0e4d4 100%);
+      }
+
+      .wrap {
+        width: min(1080px, calc(100% - 24px));
+        margin: 0 auto;
+        padding: 36px 0 60px;
+      }
+
+      .hero {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        padding: 28px;
+        box-shadow: 0 20px 60px rgba(71, 44, 26, 0.08);
+      }
+
+      h1,
+      h2 {
+        font-family: Georgia, "Times New Roman", serif;
+        letter-spacing: -0.04em;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(36px, 6vw, 60px);
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .actions,
+      .grid {
+        display: grid;
+        gap: 18px;
+      }
+
+      .actions {
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        margin-top: 22px;
+      }
+
+      .grid {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        margin-top: 26px;
+      }
+
+      .card {
+        background: rgba(255, 252, 246, 0.92);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 22px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        padding: 0 18px;
+        border-radius: 999px;
+        text-decoration: none;
+        font-weight: 700;
+        transition: transform 0.18s ease;
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--accent) 0%, #cf6a43 100%);
+        color: white;
+      }
+
+      .btn-secondary {
+        border: 1px solid var(--line);
+        background: white;
+        color: var(--forest);
+      }
+
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 30px;
+      }
+
+      .meta {
+        font-size: 14px;
+        color: var(--muted);
+        margin-bottom: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <h1>Baixar Artes</h1>
+        <p>
+          Aqui voce consegue baixar as artes de forma direta, sem depender do botao da
+          visualizacao. Se quiser, baixe tudo no arquivo ZIP ou escolha cada imagem separadamente.
+        </p>
+
+        <div class="actions">
+          <a class="btn btn-primary" href="./artes-do-santos-market.zip" download>Baixar Tudo em ZIP</a>
+          <a class="btn btn-secondary" href="./feed-v3-ds.png" download>Baixar Melhor Post</a>
+          <a class="btn btn-secondary" href="./story-v2.png" download>Baixar Melhor Story</a>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Post Principal</h2>
+          <div class="meta">Arquivo recomendado para feed</div>
+          <a class="btn btn-primary" href="./feed-v3-ds.png" download>Baixar PNG</a>
+        </article>
+
+        <article class="card">
+          <h2>Story Principal</h2>
+          <div class="meta">Arquivo recomendado para stories</div>
+          <a class="btn btn-primary" href="./story-v2.png" download>Baixar PNG</a>
+        </article>
+
+        <article class="card">
+          <h2>Post Alternativo 1</h2>
+          <div class="meta">Versao quadrada alternativa</div>
+          <a class="btn btn-secondary" href="./feed-v1.png" download>Baixar PNG</a>
+        </article>
+
+        <article class="card">
+          <h2>Post Alternativo 2</h2>
+          <div class="meta">Versao quadrada alternativa</div>
+          <a class="btn btn-secondary" href="./feed-v2.png" download>Baixar PNG</a>
+        </article>
+
+        <article class="card">
+          <h2>Story Alternativo 1</h2>
+          <div class="meta">Versao vertical alternativa</div>
+          <a class="btn btn-secondary" href="./story-v1.png" download>Baixar PNG</a>
+        </article>
+
+        <article class="card">
+          <h2>Story Alternativo 2</h2>
+          <div class="meta">Versao vertical alternativa</div>
+          <a class="btn btn-secondary" href="./story-instagram-ds.png" download>Baixar PNG</a>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

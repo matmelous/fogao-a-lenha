@@ -12,7 +12,8 @@ type MockResponse = {
   end: () => MockResponse;
 };
 
-const dataFilePath = '/tmp/minas-data.json';
+const dataDirectoryPath = '/tmp/minas-data';
+const dataFilePath = `${dataDirectoryPath}/fogao-a-lenha.json`;
 
 const createMockResponse = (): MockResponse => {
   const response: MockResponse = {
@@ -40,7 +41,7 @@ const createMockResponse = (): MockResponse => {
 
 afterEach(async () => {
   delete process.env.ADMIN_API_TOKEN;
-  await fs.rm(dataFilePath, { force: true });
+  await fs.rm(dataDirectoryPath, { force: true, recursive: true });
 });
 
 describe('api/data handler', () => {
@@ -48,7 +49,7 @@ describe('api/data handler', () => {
     process.env.ADMIN_API_TOKEN = 'segredo';
     const req = {
       method: 'POST',
-      headers: {},
+      headers: { 'x-tenant-id': 'fogao-a-lenha' },
       body: { categories: [], items: [], settings: {} },
     };
     const res = createMockResponse();
@@ -61,14 +62,15 @@ describe('api/data handler', () => {
   it('salva e retorna dados com sucesso', async () => {
     const saveReq = {
       method: 'POST',
-      headers: {},
+      headers: { 'x-tenant-id': 'fogao-a-lenha' },
       body: { categories: [{ id: 'c1' }], items: [{ id: 'i1' }], settings: { name: 'Minas' } },
     };
     const saveRes = createMockResponse();
     await handler(saveReq as never, saveRes as never);
     expect(saveRes.statusCode).toBe(200);
+    await expect(fs.readFile(dataFilePath, 'utf-8')).resolves.toContain('"name":"Minas"');
 
-    const getReq = { method: 'GET', headers: {} };
+    const getReq = { method: 'GET', headers: { 'x-tenant-id': 'fogao-a-lenha' } };
     const getRes = createMockResponse();
     await handler(getReq as never, getRes as never);
 
@@ -80,6 +82,39 @@ describe('api/data handler', () => {
         items: [{ id: 'i1' }],
         settings: { name: 'Minas' },
       },
+    });
+  });
+
+  it('isola dados entre tenants diferentes', async () => {
+    const tenantAReq = {
+      method: 'POST',
+      headers: { 'x-tenant-id': 'tenant-a' },
+      body: { categories: [{ id: 'a' }], items: [], settings: { name: 'Tenant A' } },
+    };
+    const tenantBReq = {
+      method: 'POST',
+      headers: { 'x-tenant-id': 'tenant-b' },
+      body: { categories: [{ id: 'b' }], items: [], settings: { name: 'Tenant B' } },
+    };
+
+    await handler(tenantAReq as never, createMockResponse() as never);
+    await handler(tenantBReq as never, createMockResponse() as never);
+
+    const getResA = createMockResponse();
+    await handler({ method: 'GET', headers: { 'x-tenant-id': 'tenant-a' } } as never, getResA as never);
+
+    const getResB = createMockResponse();
+    await handler({ method: 'GET', headers: { 'x-tenant-id': 'tenant-b' } } as never, getResB as never);
+
+    expect(getResA.body).toMatchObject({
+      success: true,
+      tenantId: 'tenant-a',
+      data: { settings: { name: 'Tenant A' } },
+    });
+    expect(getResB.body).toMatchObject({
+      success: true,
+      tenantId: 'tenant-b',
+      data: { settings: { name: 'Tenant B' } },
     });
   });
 });

@@ -64,6 +64,7 @@ export interface RestaurantSettings {
 export interface Order {
   id: string;
   customerName: string;
+  customerEmail?: string;
   customerPhone: string;
   address: string;
   items: { item: MenuItem; quantity: number }[];
@@ -71,4 +72,6 @@ export interface Order {
   status: 'pending' | 'preparing' | 'delivered' | 'cancelled';
   createdAt: string;
   paymentMethod: string;
+  paymentStatus?: 'pending' | 'awaiting_pix' | 'approved' | 'failed';
+  paymentId?: string;
 }

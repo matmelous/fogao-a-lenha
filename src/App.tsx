@@ -30,6 +30,21 @@ import {
 import type { MenuItem, Category, RestaurantSettings, Order } from './types';
 import { initialCategories, initialMenuItems, initialSettings } from './data';
 import { motion, AnimatePresence } from 'framer-motion';
+import { currentTenantConfig, currentTenantId, tenantStorageKeys } from './tenant';
+
+declare global {
+  interface Window {
+    MercadoPago?: new (publicKey: string, options?: { locale?: string }) => {
+      bricks: () => {
+        create: (
+          brickType: string,
+          containerId: string,
+          settings: Record<string, unknown>,
+        ) => Promise<{ unmount?: () => Promise<void> | void }>;
+      };
+    };
+  }
+}
 
 // Helper function to generate unique IDs
 const generateId = () => {
@@ -42,6 +57,25 @@ const generateId = () => {
   return timestamp.slice(-5) + random.slice(-3);
 };
 
+const legacyStorageKeys = {
+  categories: 'minas_v2_categories',
+  items: 'minas_v2_items',
+  settings: 'minas_v2_settings',
+  orders: 'minas_v2_orders',
+  lastSync: 'minas_v2_lastSync',
+  backup: 'minas_v2_backup',
+};
+
+const getLegacyStorageKey = (key: string) => {
+  if (key === tenantStorageKeys.categories) return legacyStorageKeys.categories;
+  if (key === tenantStorageKeys.items) return legacyStorageKeys.items;
+  if (key === tenantStorageKeys.settings) return legacyStorageKeys.settings;
+  if (key === tenantStorageKeys.orders) return legacyStorageKeys.orders;
+  if (key === tenantStorageKeys.lastSync) return legacyStorageKeys.lastSync;
+  if (key === tenantStorageKeys.backup) return legacyStorageKeys.backup;
+  return '';
+};
+
 function App() {
   const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
   const normalizedAdminPassword = typeof adminPassword === 'string' ? adminPassword.trim() : '';
@@ -51,12 +85,13 @@ function App() {
   const notifyApiToken = typeof import.meta.env.VITE_NOTIFY_API_TOKEN === 'string'
     ? import.meta.env.VITE_NOTIFY_API_TOKEN.trim()
     : '';
+  const tenantDisplayName = currentTenantConfig?.name || initialSettings.name;
 
   // Version check for updates
   useEffect(() => {
     const APP_VERSION = '2.1.0';
-    const VERSION_KEY = 'minas_app_version';
-    const BUILD_TIME_KEY = 'minas_build_time';
+    const VERSION_KEY = tenantStorageKeys.version;
+    const BUILD_TIME_KEY = tenantStorageKeys.buildTime;
     
     const checkForUpdates = async () => {
       try {
@@ -168,7 +203,14 @@ function App() {
   const getStoredData = <T,>(key: string, initial: T): T => {
     try {
     const stored = localStorage.getItem(key);
-    if (!stored) return initial;
+    if (!stored) {
+      const legacyKey = getLegacyStorageKey(key);
+      if (!legacyKey) return initial;
+      const legacyStored = localStorage.getItem(legacyKey);
+      if (!legacyStored) return initial;
+      localStorage.setItem(key, legacyStored);
+      return JSON.parse(legacyStored) as T;
+    }
       const parsed = JSON.parse(stored);
       // No migration - allow any name
       return parsed;
@@ -178,10 +220,10 @@ function App() {
     }
   };
 
-  const [categories, setCategories] = useState<Category[]>(() => getStoredData('minas_v2_categories', initialCategories));
-  const [items, setItems] = useState<MenuItem[]>(() => getStoredData('minas_v2_items', initialMenuItems));
-  const [settings, setSettings] = useState<RestaurantSettings>(() => getStoredData('minas_v2_settings', initialSettings));
-  const [orders, setOrders] = useState<Order[]>(() => getStoredData('minas_v2_orders', []));
+  const [categories, setCategories] = useState<Category[]>(() => getStoredData(tenantStorageKeys.categories, initialCategories));
+  const [items, setItems] = useState<MenuItem[]>(() => getStoredData(tenantStorageKeys.items, initialMenuItems));
+  const [settings, setSettings] = useState<RestaurantSettings>(() => getStoredData(tenantStorageKeys.settings, initialSettings));
+  const [orders, setOrders] = useState<Order[]>(() => getStoredData(tenantStorageKeys.orders, []));
   const [isInitialized, setIsInitialized] = useState(false);
   const [lastSyncStatus, setLastSyncStatus] = useState<{ success: boolean; time: string | null; error?: string }>({ success: false, time: null });
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
@@ -198,16 +240,16 @@ function App() {
   // Auto-update restaurant name if it's the old one
   useEffect(() => {
     if (settings.name === 'Fogão & Sabor' || settings.name === 'Fogao & Sabor') {
-      const updatedSettings = { ...settings, name: 'Fogão a Lenha' };
+      const updatedSettings = { ...settings, name: 'Sabor Caseiro' };
       setSettings(updatedSettings);
       try {
-        localStorage.setItem('minas_v2_settings', JSON.stringify(updatedSettings));
-        console.log('✅ Restaurant name updated from "Fogão & Sabor" to "Fogão a Lenha"');
+        localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
+        console.log('✅ Restaurant name updated from "Fogão & Sabor" to "Sabor Caseiro"');
       } catch (e) {
         console.error('Error updating restaurant name:', e);
       }
     }
-  }, [settings.name]);
+  }, [settings]);
 
   // Initialize bankInfo and paymentTokens if they don't exist
   useEffect(() => {
@@ -237,12 +279,12 @@ function App() {
       };
       setSettings(updatedSettings);
       try {
-        localStorage.setItem('minas_v2_settings', JSON.stringify(updatedSettings));
+        localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
       } catch (e) {
         console.error('Error initializing bank info and payment tokens:', e);
       }
     }
-  }, []);
+  }, [settings]);
   
   const handleAdminLogin = () => {
     if (!isDesktop) return;
@@ -338,12 +380,21 @@ function App() {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isPaymentReviewOpen, setIsPaymentReviewOpen] = useState(false);
   const [orderConfirmation, setOrderConfirmation] = useState<Order | null>(null);
+  const [pixOrder, setPixOrder] = useState<Order | null>(null);
+  const [pixCopied, setPixCopied] = useState(false);
+  const [isCardPaymentOpen, setIsCardPaymentOpen] = useState(false);
+  const [cardCheckoutOrder, setCardCheckoutOrder] = useState<Order | null>(null);
+  const [cardPaymentError, setCardPaymentError] = useState<string | null>(null);
+  const [isCardBrickReady, setIsCardBrickReady] = useState(false);
+  const [isCardSubmitting, setIsCardSubmitting] = useState(false);
   const [isNewItemModalOpen, setIsNewItemModalOpen] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '', image: '', available: true });
   const defaultHeroForegroundImage = '/sabor-caseiro-hero.png';
   const heroForegroundImage = settings.heroImage || settings.logo || defaultHeroForegroundImage;
   const latestDataRef = useRef({ categories, items, settings, orders });
+  const mercadoPagoScriptPromiseRef = useRef<Promise<void> | null>(null);
+  const cardBrickControllerRef = useRef<{ unmount?: () => Promise<void> | void } | null>(null);
 
   useEffect(() => {
     latestDataRef.current = { categories, items, settings, orders };
@@ -440,8 +491,8 @@ function App() {
 
   // Persistence effects
   useEffect(() => {
-    document.title = settings.name || 'Fogão a Lenha';
-  }, [settings.name]);
+    document.title = settings.name || tenantDisplayName;
+  }, [settings.name, tenantDisplayName]);
 
   // Sync functions
   const getApiUrl = () => {
@@ -449,8 +500,10 @@ function App() {
   };
 
   const getApiAuthHeaders = () => {
-    if (!adminApiToken) return {};
-    return { 'x-admin-token': adminApiToken };
+    return {
+      'x-tenant-id': currentTenantId,
+      ...(adminApiToken ? { 'x-admin-token': adminApiToken } : {}),
+    };
   };
 
   // Compress image to very small size for cloud sync (ultra compression)
@@ -597,7 +650,7 @@ function App() {
         });
         // Also save sync time to localStorage
         try {
-          localStorage.setItem('minas_v2_lastSync', JSON.stringify({ time: now.toISOString(), success: true }));
+          localStorage.setItem(tenantStorageKeys.lastSync, JSON.stringify({ time: now.toISOString(), success: true }));
         } catch (e) {
           console.error('Error saving sync time:', e);
         }
@@ -624,7 +677,11 @@ function App() {
 
   const loadFromCloud = async (preserveLocalImages = false) => {
     try {
-      const response = await fetch(getApiUrl());
+      const response = await fetch(getApiUrl(), {
+        headers: {
+          'x-tenant-id': currentTenantId,
+        },
+      });
       const result = await response.json();
       
       if (result.success && result.data) {
@@ -694,8 +751,8 @@ function App() {
           
           // Auto-update restaurant name if it's the old one
           if (mergedSettings.name === 'Fogão & Sabor' || mergedSettings.name === 'Fogao & Sabor') {
-            mergedSettings.name = 'Fogão a Lenha';
-            console.log('✅ Restaurant name updated from cloud data: "Fogão & Sabor" → "Fogão a Lenha"');
+            mergedSettings.name = 'Sabor Caseiro';
+            console.log('✅ Restaurant name updated from cloud data: "Fogão & Sabor" → "Sabor Caseiro"');
           }
           
           setCategories(cloudData.categories);
@@ -707,11 +764,11 @@ function App() {
           
           // Also save merged data to localStorage
           try {
-            localStorage.setItem('minas_v2_categories', JSON.stringify(cloudData.categories));
-            localStorage.setItem('minas_v2_items', JSON.stringify(mergedItems));
-            localStorage.setItem('minas_v2_settings', JSON.stringify(mergedSettings));
+            localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(cloudData.categories));
+            localStorage.setItem(tenantStorageKeys.items, JSON.stringify(mergedItems));
+            localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(mergedSettings));
             if (cloudData.orders) {
-              localStorage.setItem('minas_v2_orders', JSON.stringify(cloudData.orders));
+              localStorage.setItem(tenantStorageKeys.orders, JSON.stringify(cloudData.orders));
             }
           } catch (e) {
             console.error('Error saving to localStorage:', e);
@@ -731,7 +788,7 @@ function App() {
   // Load last sync status from localStorage
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('minas_v2_lastSync');
+      const stored = localStorage.getItem(tenantStorageKeys.lastSync) ?? localStorage.getItem(legacyStorageKeys.lastSync);
       if (stored) {
         const syncData = JSON.parse(stored);
         if (syncData.time) {
@@ -763,7 +820,7 @@ function App() {
         orders: JSON.parse(JSON.stringify(ords)),
         timestamp: new Date().toISOString()
       };
-      localStorage.setItem('minas_v2_backup', JSON.stringify(backup));
+      localStorage.setItem(tenantStorageKeys.backup, JSON.stringify(backup));
       console.log('✅ Backup created:', backup.timestamp);
     } catch (error) {
       console.error('Error creating backup:', error);
@@ -785,7 +842,11 @@ function App() {
         // Create backup before loading from cloud
         createBackup(currentCategories, currentItems, currentSettings, currentOrders);
         
-        const response = await fetch(getApiUrl());
+        const response = await fetch(getApiUrl(), {
+          headers: {
+            'x-tenant-id': currentTenantId,
+          },
+        });
         const result = await response.json();
         
         if (result.success && result.data && result.lastUpdated) {
@@ -848,6 +909,7 @@ function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Close category dropdown when clicking outside
@@ -874,6 +936,7 @@ function App() {
     }, 2000); // Wait 2 seconds after last change before syncing
 
     return () => clearTimeout(syncTimeout);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categories, items, settings, isInitialized, isDesktop, isAdminAuthenticated]);
 
   // No forced migration - allow any name
@@ -889,8 +952,8 @@ function App() {
     // Check if we need to recover or add "Prato do Dia"
     const checkAndRecover = () => {
       try {
-        const backupStr = localStorage.getItem('minas_v2_backup');
-        const currentCategories = JSON.parse(localStorage.getItem('minas_v2_categories') || '[]');
+        const backupStr = localStorage.getItem(tenantStorageKeys.backup) ?? localStorage.getItem(legacyStorageKeys.backup);
+        const currentCategories = JSON.parse(localStorage.getItem(tenantStorageKeys.categories) || localStorage.getItem(legacyStorageKeys.categories) || '[]');
         const hasPratoDoDia = currentCategories.some((cat: Category) => 
           cat.name && cat.name.toLowerCase().includes('prato') && cat.name.toLowerCase().includes('dia')
         );
@@ -943,11 +1006,11 @@ function App() {
     try {
       // Create backup before saving (only once per save cycle to avoid loops)
       createBackup(categories, items, settings, orders);
-      localStorage.setItem('minas_v2_categories', JSON.stringify(categories));
+      localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(categories));
     } catch (error) {
       console.error('Error saving categories to localStorage:', error);
     }
-  }, [categories, isInitialized]);
+  }, [categories, items, settings, orders, isInitialized]);
 
   useEffect(() => {
     if (!isInitialized) return;
@@ -962,9 +1025,9 @@ function App() {
           ...item,
           image: item.image && item.image.length > 100000 ? undefined : item.image
         }));
-        localStorage.setItem('minas_v2_items', JSON.stringify(itemsWithoutLargeImages));
+        localStorage.setItem(tenantStorageKeys.items, JSON.stringify(itemsWithoutLargeImages));
       } else {
-        localStorage.setItem('minas_v2_items', itemsJson);
+        localStorage.setItem(tenantStorageKeys.items, itemsJson);
       }
     } catch (error) {
       console.error('Error saving items to localStorage:', error);
@@ -990,7 +1053,7 @@ function App() {
       
       // Try to save normally first
       try {
-        localStorage.setItem('minas_v2_settings', settingsJson);
+        localStorage.setItem(tenantStorageKeys.settings, settingsJson);
       } catch (saveError) {
         // Only handle quota errors, ignore other errors
         if (saveError instanceof DOMException && saveError.name === 'QuotaExceededError') {
@@ -1004,7 +1067,7 @@ function App() {
               aboutImage1: settings.aboutImage1 && settings.aboutImage1.length > 2000000 ? undefined : settings.aboutImage1,
               aboutImage2: settings.aboutImage2 && settings.aboutImage2.length > 2000000 ? undefined : settings.aboutImage2,
             };
-            localStorage.setItem('minas_v2_settings', JSON.stringify(settingsWithoutLargeMedia));
+            localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(settingsWithoutLargeMedia));
             console.warn('Saved settings without largest media files');
           } catch {
             // If still fails, throw to outer catch
@@ -1037,7 +1100,7 @@ function App() {
   useEffect(() => {
     if (!isInitialized) return;
     try {
-      localStorage.setItem('minas_v2_orders', JSON.stringify(orders));
+      localStorage.setItem(tenantStorageKeys.orders, JSON.stringify(orders));
     } catch (error) {
       console.error('Error saving orders to localStorage:', error);
     }
@@ -1048,6 +1111,7 @@ function App() {
 
   // Checkout form
   const [customerName, setCustomerName] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Dinheiro');
@@ -1076,23 +1140,189 @@ function App() {
     }
   };
 
-  const notifyOrderByWhatsapp = async (order: Order) => {
+  const notifyOrderByWhatsapp = async (
+    order: Order,
+    notificationType: 'new_order' | 'payment_confirmed' = 'new_order',
+  ) => {
     try {
       const response = await fetch('/api/notify-order', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-tenant-id': currentTenantId,
           ...(notifyApiToken ? { 'x-notify-token': notifyApiToken } : {}),
         },
-        body: JSON.stringify(order),
+        body: JSON.stringify({
+          ...order,
+          notificationType,
+        }),
       });
       if (!response.ok) {
         const errorText = await response.text();
         console.error('Falha ao notificar pedido por WhatsApp API:', errorText);
+        return false;
       }
+      return true;
     } catch (error) {
       console.error('Erro ao enviar notificacao por WhatsApp API:', error);
+      return false;
     }
+  };
+
+  const copyText = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+  };
+
+  const getRestaurantWhatsappUrl = (message: string) => {
+    const normalizedWhatsapp = settings.whatsapp.replace(/\D/g, '');
+    return `https://wa.me/55${normalizedWhatsapp}?text=${encodeURIComponent(message)}`;
+  };
+
+  const buildOrderWhatsappMessage = (order: Order, paymentLabel?: string) => {
+    const itemsList = order.items
+      .map((entry) => `*${entry.quantity}x ${entry.item.name}* - R$ ${(entry.item.price * entry.quantity).toFixed(2)}`)
+      .join('\n');
+
+    return `*NOVO PEDIDO #${order.id}*\n\n` +
+      `*Cliente:* ${order.customerName}\n` +
+      `${order.customerEmail ? `*Email:* ${order.customerEmail}\n` : ''}` +
+      `*Telefone:* ${order.customerPhone}\n` +
+      `*Endereço:* ${order.address}\n` +
+      `*Pagamento:* ${paymentLabel || order.paymentMethod}\n\n` +
+      `*Itens:*\n${itemsList}\n\n` +
+      `*Subtotal:* R$ ${(order.total - settings.deliveryFee).toFixed(2)}\n` +
+      `*Taxa de Entrega:* R$ ${settings.deliveryFee.toFixed(2)}\n` +
+      `*TOTAL:* R$ ${order.total.toFixed(2)}\n\n` +
+      `_Pedido realizado via Site_`;
+  };
+
+  const openRestaurantWhatsappFallback = (message: string) => {
+    window.open(getRestaurantWhatsappUrl(message), '_blank');
+  };
+
+  const getPixKeyLabel = () => settings.bankInfo?.pixKey?.trim() || '';
+
+  const isCardPaymentMethod = (method: string) =>
+    method === 'Cartão de Crédito' || method === 'Cartão de Débito';
+
+  const validateCheckoutFields = () => {
+    if (!customerName || !customerPhone || !deliveryAddress) {
+      alert('Por favor, preencha todos os campos obrigatórios.');
+      return false;
+    }
+
+    if (isCardPaymentMethod(paymentMethod) && !customerEmail.trim()) {
+      alert('Informe um e-mail para continuar com o pagamento no cartão.');
+      return false;
+    }
+
+    return true;
+  };
+
+  const buildOrder = (overrides?: Partial<Order>): Order => {
+    const orderId = generateId();
+    return {
+      id: orderId,
+      customerName,
+      customerEmail: customerEmail.trim() || undefined,
+      customerPhone,
+      address: deliveryAddress,
+      items: [...cart],
+      total: cartTotal + settings.deliveryFee,
+      status: overrides?.status || 'pending',
+      createdAt: new Date().toISOString(),
+      paymentMethod,
+      paymentStatus: overrides?.paymentStatus || 'pending',
+      paymentId: overrides?.paymentId,
+    };
+  };
+
+  const resetCheckoutState = () => {
+    setCart([]);
+    setIsCheckoutOpen(false);
+    setIsPaymentReviewOpen(false);
+    setIsCartOpen(false);
+    setCustomerName('');
+    setCustomerEmail('');
+    setCustomerPhone('');
+    setDeliveryAddress('');
+    setPaymentMethod((settings.paymentMethods || [])[0] || 'Dinheiro');
+  };
+
+  const persistOrder = async (
+    order: Order,
+    notificationType: 'new_order' | 'payment_confirmed' = 'new_order',
+    fallbackMessage?: string,
+  ) => {
+    setOrders(prev => [order, ...prev]);
+    const notifySucceeded = await notifyOrderByWhatsapp(order, notificationType);
+    if (!notifySucceeded && fallbackMessage) {
+      openRestaurantWhatsappFallback(fallbackMessage);
+    }
+  };
+
+  const updateExistingOrder = (orderId: string, updates: Partial<Order>) => {
+    setOrders(prev => prev.map(order => (
+      order.id === orderId
+        ? { ...order, ...updates }
+        : order
+    )));
+  };
+
+  const finalizeSuccessfulOrder = async (order: Order, paymentLabel: string) => {
+    const updatedOrder: Order = {
+      ...order,
+      status: 'preparing',
+      paymentStatus: 'approved',
+    };
+
+    updateExistingOrder(order.id, {
+      status: 'preparing',
+      paymentStatus: 'approved',
+      paymentId: order.paymentId,
+    });
+
+    const paymentConfirmedMessage = `*PAGAMENTO CONFIRMADO #${updatedOrder.id}*\n\n` +
+      `Cliente: ${updatedOrder.customerName}\n` +
+      `Pagamento: ${paymentLabel}\n` +
+      `Total: R$ ${updatedOrder.total.toFixed(2)}\n\n` +
+      `Pedido liberado para produção.`;
+
+    const notifySucceeded = await notifyOrderByWhatsapp(updatedOrder, 'payment_confirmed');
+    if (!notifySucceeded) {
+      openRestaurantWhatsappFallback(paymentConfirmedMessage);
+    }
+
+    setPixOrder(null);
+    setOrderConfirmation(updatedOrder);
+    resetCheckoutState();
+  };
+
+  const ensureMercadoPagoSdk = async () => {
+    if (window.MercadoPago) return;
+    if (mercadoPagoScriptPromiseRef.current) {
+      await mercadoPagoScriptPromiseRef.current;
+      return;
+    }
+
+    mercadoPagoScriptPromiseRef.current = new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>('script[data-mercado-pago-sdk="true"]');
+      if (existing) {
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', () => reject(new Error('Falha ao carregar o SDK do Mercado Pago.')), { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://sdk.mercadopago.com/js/v2';
+      script.async = true;
+      script.dataset.mercadoPagoSdk = 'true';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Falha ao carregar o SDK do Mercado Pago.'));
+      document.head.appendChild(script);
+    });
+
+    await mercadoPagoScriptPromiseRef.current;
   };
 
   const addToCart = (item: MenuItem) => {
@@ -1188,6 +1418,218 @@ function App() {
     window.open(whatsappUrl, '_blank');
   };
 
+  const startPixCheckout = async () => {
+    if (!validateCheckoutFields()) return;
+
+    const pixKey = getPixKeyLabel();
+    if (!pixKey) {
+      alert('Cadastre a chave PIX no painel administrativo antes de receber pagamentos por PIX.');
+      return;
+    }
+
+    const newOrder = buildOrder({
+      paymentStatus: 'awaiting_pix',
+      status: 'pending',
+    });
+
+    await persistOrder(newOrder, 'new_order', buildOrderWhatsappMessage(newOrder, 'PIX - aguardando confirmação'));
+    setPixCopied(false);
+    setPixOrder(newOrder);
+  };
+
+  const handlePixCopy = async () => {
+    try {
+      await copyText(getPixKeyLabel());
+      setPixCopied(true);
+    } catch (error) {
+      console.error('Erro ao copiar chave PIX:', error);
+      alert('Não foi possível copiar automaticamente. Copie a chave manualmente.');
+    }
+  };
+
+  const confirmPixPayment = async () => {
+    if (!pixOrder) return;
+    await finalizeSuccessfulOrder(pixOrder, 'PIX aprovado');
+  };
+
+  const startCardCheckout = async () => {
+    if (!validateCheckoutFields()) return;
+
+    const publicKey = settings.paymentTokens?.mercadoPagoPublicKey?.trim();
+    if (!publicKey) {
+      alert('Cadastre a chave pública do Mercado Pago no painel administrativo para receber pagamentos no cartão.');
+      return;
+    }
+
+    const pendingOrder = buildOrder({
+      paymentStatus: 'pending',
+      status: 'pending',
+    });
+
+    setCardPaymentError(null);
+    setIsCardBrickReady(false);
+    setCardCheckoutOrder(pendingOrder);
+    setIsCardPaymentOpen(true);
+  };
+
+  const handleCheckoutSubmit = () => {
+    if (paymentMethod === 'PIX') {
+      void startPixCheckout();
+      return;
+    }
+
+    if (isCardPaymentMethod(paymentMethod)) {
+      void startCardCheckout();
+      return;
+    }
+
+    placeOrder();
+  };
+
+  /* eslint-disable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    if (!isCardPaymentOpen || !cardCheckoutOrder) return;
+
+    let isCancelled = false;
+
+    const mountBrick = async () => {
+      try {
+        setCardPaymentError(null);
+        setIsCardSubmitting(false);
+        await ensureMercadoPagoSdk();
+
+        if (!window.MercadoPago) {
+          throw new Error('SDK do Mercado Pago indisponível.');
+        }
+
+        await cardBrickControllerRef.current?.unmount?.();
+
+        const mercadoPago = new window.MercadoPago(
+          settings.paymentTokens?.mercadoPagoPublicKey?.trim() || '',
+          { locale: 'pt-BR' },
+        );
+
+        const bricksBuilder = mercadoPago.bricks();
+        const controller = await bricksBuilder.create('cardPayment', 'cardPaymentBrick_container', {
+          initialization: {
+            amount: Number(cardCheckoutOrder.total.toFixed(2)),
+            payer: {
+              email: customerEmail.trim(),
+            },
+          },
+          customization: {
+            visual: {
+              hidePaymentButton: false,
+              style: {
+                theme: 'default',
+              },
+            },
+            paymentMethods: {
+              maxInstallments: paymentMethod === 'Cartão de Débito' ? 1 : 12,
+            },
+          },
+          callbacks: {
+            onReady: () => {
+              if (!isCancelled) {
+                setIsCardBrickReady(true);
+              }
+            },
+            onSubmit: async (formData: Record<string, unknown>) => {
+              setIsCardSubmitting(true);
+              setCardPaymentError(null);
+
+              const response = await fetch('/api/process-payment', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-tenant-id': currentTenantId,
+                },
+                body: JSON.stringify({
+                  orderId: cardCheckoutOrder.id,
+                  total: cardCheckoutOrder.total,
+                  customerName: cardCheckoutOrder.customerName,
+                  customerEmail: customerEmail.trim(),
+                  customerPhone: cardCheckoutOrder.customerPhone,
+                  address: cardCheckoutOrder.address,
+                  paymentMethod,
+                  items: cardCheckoutOrder.items,
+                  cardFormData: formData,
+                }),
+              });
+
+              const result = await response.json();
+              if (!response.ok || !result.success || result.status !== 'approved') {
+                throw new Error(
+                  result?.error?.message ||
+                  result?.statusDetail ||
+                  'Pagamento não aprovado. Verifique os dados do cartão e tente novamente.',
+                );
+              }
+
+              const paidOrder: Order = {
+                ...cardCheckoutOrder,
+                status: 'preparing',
+                paymentStatus: 'approved',
+                paymentId: String(result.paymentId || ''),
+              };
+
+              await persistOrder(
+                paidOrder,
+                'new_order',
+                buildOrderWhatsappMessage(paidOrder, `${paymentMethod} aprovado`),
+              );
+
+              setIsCardPaymentOpen(false);
+              setCardCheckoutOrder(null);
+              await finalizeSuccessfulOrder(paidOrder, `${paymentMethod} aprovado`);
+            },
+            onError: (error: unknown) => {
+              console.error('Erro no Brick do Mercado Pago:', error);
+              if (!isCancelled) {
+                setCardPaymentError('Não foi possível abrir o formulário do cartão. Confira a chave pública e tente novamente.');
+              }
+            },
+          },
+        });
+
+        if (!isCancelled) {
+          cardBrickControllerRef.current = controller;
+        } else {
+          await controller?.unmount?.();
+        }
+      } catch (error) {
+        console.error('Erro ao iniciar pagamento com cartão:', error);
+        if (!isCancelled) {
+          setCardPaymentError(
+            error instanceof Error
+              ? error.message
+              : 'Não foi possível carregar o checkout do cartão.',
+          );
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsCardSubmitting(false);
+        }
+      }
+    };
+
+    void mountBrick();
+
+    return () => {
+      isCancelled = true;
+      setIsCardBrickReady(false);
+      void cardBrickControllerRef.current?.unmount?.();
+      cardBrickControllerRef.current = null;
+    };
+  }, [
+    isCardPaymentOpen,
+    cardCheckoutOrder,
+    customerEmail,
+    paymentMethod,
+    settings.paymentTokens?.mercadoPagoPublicKey,
+  ]);
+  /* eslint-enable react-hooks/exhaustive-deps */
+
   useEffect(() => {
     if (!orders.length) return;
     const latestOrder = orders[0];
@@ -1244,7 +1686,7 @@ function App() {
   // Restore backup from localStorage
   const restoreFromBackup = () => {
     try {
-      const backupStr = localStorage.getItem('minas_v2_backup');
+      const backupStr = localStorage.getItem(tenantStorageKeys.backup) ?? localStorage.getItem(legacyStorageKeys.backup);
       if (!backupStr) {
         alert('❌ Nenhum backup encontrado no armazenamento local.\n\nO backup automático é criado antes de sincronizações com a nuvem.');
         return;
@@ -1278,11 +1720,11 @@ function App() {
       }
       
       // Save to localStorage
-      localStorage.setItem('minas_v2_categories', JSON.stringify(backup.categories));
-      localStorage.setItem('minas_v2_items', JSON.stringify(backup.items));
-      localStorage.setItem('minas_v2_settings', JSON.stringify(backup.settings));
+      localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(backup.categories));
+      localStorage.setItem(tenantStorageKeys.items, JSON.stringify(backup.items));
+      localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(backup.settings));
       if (backup.orders) {
-        localStorage.setItem('minas_v2_orders', JSON.stringify(backup.orders));
+        localStorage.setItem(tenantStorageKeys.orders, JSON.stringify(backup.orders));
       }
       
       alert('✅ Backup restaurado com sucesso!\n\nA página será recarregada em 1 segundo...');
@@ -1617,11 +2059,11 @@ function App() {
     
     // Save to localStorage immediately
     try {
-      localStorage.setItem('minas_v2_categories', JSON.stringify(importedData.categories));
-      localStorage.setItem('minas_v2_items', JSON.stringify(importedData.items));
-      localStorage.setItem('minas_v2_settings', JSON.stringify(importedData.settings));
+      localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(importedData.categories));
+      localStorage.setItem(tenantStorageKeys.items, JSON.stringify(importedData.items));
+      localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(importedData.settings));
       if (importedData.orders) {
-        localStorage.setItem('minas_v2_orders', JSON.stringify(importedData.orders));
+        localStorage.setItem(tenantStorageKeys.orders, JSON.stringify(importedData.orders));
       }
       
       console.log('Data saved to localStorage successfully');
@@ -1813,11 +2255,11 @@ function App() {
               })()
             ) : (
               <div className="h-[11px] sm:h-[18px] md:h-[24px] aspect-square bg-orange-700 rounded-xl sm:rounded-2xl flex items-center justify-center text-white font-black text-[11px] sm:text-lg md:text-2xl shadow-lg shadow-orange-700/20 rotate-3 flex-shrink-0">
-                {(settings.name || 'Fogão a Lenha').split(' ').filter(Boolean).map(n => n[0] || '').join('').slice(0, 2).toUpperCase()}
+                {(settings.name || 'Sabor Caseiro').split(' ').filter(Boolean).map(n => n[0] || '').join('').slice(0, 2).toUpperCase()}
               </div>
             )}
             <div className="flex flex-col justify-center min-w-0 flex-1 overflow-hidden pr-1 sm:pr-2">
-              <h1 className="text-[11px] sm:text-lg md:text-2xl font-black text-orange-900 leading-tight sm:leading-none tracking-tight mb-0.5 sm:mb-1">{settings.name || 'Fogão a Lenha'}</h1>
+              <h1 className="text-[11px] sm:text-lg md:text-2xl font-black text-orange-900 leading-tight sm:leading-none tracking-tight mb-0.5 sm:mb-1">{settings.name || 'Sabor Caseiro'}</h1>
               <p className="text-[8px] sm:text-[11px] text-green-700 font-bold tracking-[0.1em] sm:tracking-[0.2em] uppercase">Comida Caseira</p>
             </div>
           </div>
@@ -1895,7 +2337,7 @@ function App() {
             ) : (
               <div className="relative z-10 flex h-44 w-44 items-center justify-center rounded-[2.5rem] border border-orange-200/20 bg-white/10 px-8 text-center shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-lg sm:h-56 sm:w-56 md:h-72 md:w-72">
                 <span className="text-3xl font-black tracking-tight text-orange-100 sm:text-4xl md:text-5xl">
-                  {(settings.name || 'Fogão a Lenha').split(' ').filter(Boolean).slice(0, 2).join(' ')}
+                  {(settings.name || 'Sabor Caseiro').split(' ').filter(Boolean).slice(0, 2).join(' ')}
                 </span>
               </div>
             )}
@@ -1914,7 +2356,7 @@ function App() {
             transition={{ delay: 0.1 }}
             className="mb-4 px-2 text-3xl font-black leading-[0.92] tracking-tighter text-white sm:mb-6 sm:text-4xl md:mb-8 md:text-5xl lg:text-6xl"
           >
-            O sabor <span className="text-orange-400 underline decoration-orange-400/30 underline-offset-4 sm:underline-offset-8">autêntico</span> da Comida Caseira
+            O sabor <span className="text-orange-400 underline decoration-orange-400/30 underline-offset-4 sm:underline-offset-8">especial</span> que valoriza a sua marca
           </motion.h2>
           <motion.p 
             initial={{ opacity: 0, y: 20 }}
@@ -2085,16 +2527,16 @@ function App() {
             <span className="text-orange-400 font-black tracking-[0.3em] uppercase text-[10px] sm:text-xs mb-4 sm:mb-6 block">Tradição & Família</span>
             <h3 className="text-3xl sm:text-4xl md:text-5xl lg:text-7xl font-black text-white mb-6 sm:mb-8 tracking-tighter leading-[0.9]">Sabor e dedicação em cada detalhe</h3>
             <p className="text-stone-400 text-base sm:text-lg md:text-xl leading-relaxed mb-8 sm:mb-10 md:mb-12 font-medium">
-              O restaurante Fogão a Lenha nasceu do desejo de trazer os sabores autênticos da comida caseira.
+              O Sabor Caseiro nasceu para unir cardápio organizado, sabor marcante e uma apresentação mais profissional para cada cliente.
             </p>
             <div className="grid grid-cols-2 gap-4 sm:gap-6 md:gap-10">
               <div className="p-4 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10">
-                <span className="block text-2xl sm:text-3xl md:text-4xl font-black text-orange-400 mb-1 sm:mb-2">10+</span>
-                <span className="text-stone-500 font-bold uppercase tracking-widest text-[10px] sm:text-xs">Anos de Tradição</span>
+                <span className="block text-2xl sm:text-3xl md:text-4xl font-black text-orange-400 mb-1 sm:mb-2">100%</span>
+                <span className="text-stone-500 font-bold uppercase tracking-widest text-[10px] sm:text-xs">Foco na Apresentação</span>
               </div>
               <div className="p-4 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10">
-                <span className="block text-2xl sm:text-3xl md:text-4xl font-black text-orange-400 mb-1 sm:mb-2">100%</span>
-                <span className="text-stone-500 font-bold uppercase tracking-widest text-[10px] sm:text-xs">Ingredientes Locais</span>
+                <span className="block text-2xl sm:text-3xl md:text-4xl font-black text-orange-400 mb-1 sm:mb-2">24h</span>
+                <span className="text-stone-500 font-bold uppercase tracking-widest text-[10px] sm:text-xs">Presença Online</span>
               </div>
             </div>
           </div>
@@ -2208,15 +2650,15 @@ function App() {
       {/* Footer */}
       <footer className="bg-orange-50 py-12 sm:py-16 md:py-24 border-t border-orange-100">
         <div className="container mx-auto px-3 sm:px-4 text-center">
-          <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mb-3 sm:mb-4 tracking-tighter">{settings.name || 'Fogão a Lenha'}</h2>
-          <p className="text-stone-500 font-medium max-w-lg mx-auto mb-8 sm:mb-12 leading-relaxed text-sm sm:text-base">O melhor da culinária mineira direto para sua mesa, com o tempero que você só encontra no interior.</p>
+          <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mb-3 sm:mb-4 tracking-tighter">{settings.name || 'Sabor Caseiro'}</h2>
+          <p className="text-stone-500 font-medium max-w-lg mx-auto mb-8 sm:mb-12 leading-relaxed text-sm sm:text-base">Cardápio digital, atendimento mais organizado e uma presença online feita para transmitir mais valor ao seu negócio.</p>
           <div className="flex justify-center gap-6 sm:gap-8 md:gap-10 mb-12 sm:mb-16 flex-wrap">
             <a href="#" className="text-stone-400 hover:text-orange-700 font-black uppercase text-xs tracking-[0.2em] transition-colors">Instagram</a>
             <a href="#" className="text-stone-400 hover:text-orange-700 font-black uppercase text-xs tracking-[0.2em] transition-colors">Facebook</a>
             <a href="#" className="text-stone-400 hover:text-orange-700 font-black uppercase text-xs tracking-[0.2em] transition-colors">Twitter</a>
           </div>
           <div className="pt-12 border-t border-orange-200/50">
-            <p className="text-stone-400 text-xs font-bold uppercase tracking-widest">© 2026 {settings.name || 'Fogão a Lenha'}. Feito com paixão mineira.</p>
+            <p className="text-stone-400 text-xs font-bold uppercase tracking-widest">© 2026 {settings.name || 'Sabor Caseiro'}. Feito para vender com mais presença.</p>
           </div>
         </div>
       </footer>
@@ -2712,7 +3154,7 @@ function App() {
                                                     
                                                     // Auto-save to localStorage
                                                     try {
-                                                      localStorage.setItem('minas_v2_items', JSON.stringify(updatedItems));
+                                                      localStorage.setItem(tenantStorageKeys.items, JSON.stringify(updatedItems));
                                                       console.log('✅ Category updated:', {
                                                         item: item.name,
                                                         oldCategory: item.category,
@@ -2832,7 +3274,7 @@ function App() {
                               setCategories(updatedCategories);
                               // Auto-save to localStorage
                               try {
-                                localStorage.setItem('minas_v2_categories', JSON.stringify(updatedCategories));
+                                localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(updatedCategories));
                               } catch (e) {
                                 console.error('Error saving categories:', e);
                               }
@@ -2882,8 +3324,8 @@ function App() {
                                     setItems(updatedItems);
                                     // Auto-save to localStorage
                                     try {
-                                      localStorage.setItem('minas_v2_categories', JSON.stringify(updatedCategories));
-                                      localStorage.setItem('minas_v2_items', JSON.stringify(updatedItems));
+                                      localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(updatedCategories));
+                                      localStorage.setItem(tenantStorageKeys.items, JSON.stringify(updatedItems));
                                     } catch (e) {
                                       console.error('Error saving categories/items:', e);
                                     }
@@ -2922,8 +3364,8 @@ function App() {
                                         
                                         // Auto-save to localStorage
                                         try {
-                                          localStorage.setItem('minas_v2_categories', JSON.stringify(updatedCategories));
-                                          localStorage.setItem('minas_v2_items', JSON.stringify(updatedItems));
+                                          localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(updatedCategories));
+                                          localStorage.setItem(tenantStorageKeys.items, JSON.stringify(updatedItems));
                                         } catch (e) {
                                           console.error('Error saving categories/items:', e);
                                         }
@@ -2946,8 +3388,8 @@ function App() {
                                         
                                         // Auto-save to localStorage
                                         try {
-                                          localStorage.setItem('minas_v2_categories', JSON.stringify(updatedCategories));
-                                          localStorage.setItem('minas_v2_items', JSON.stringify(updatedItems));
+                                          localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(updatedCategories));
+                                          localStorage.setItem(tenantStorageKeys.items, JSON.stringify(updatedItems));
                                         } catch (e) {
                                           console.error('Error saving categories/items:', e);
                                         }
@@ -2960,7 +3402,7 @@ function App() {
                                       setCategories(updatedCategories);
                                       // Auto-save to localStorage
                                       try {
-                                        localStorage.setItem('minas_v2_categories', JSON.stringify(updatedCategories));
+                                        localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(updatedCategories));
                                       } catch (e) {
                                         console.error('Error saving categories:', e);
                                       }
@@ -3004,9 +3446,9 @@ function App() {
                         <div className="flex gap-2 sm:gap-4">
                           <button 
                             onClick={() => {
-                              localStorage.setItem('minas_v2_settings', JSON.stringify(settings));
-                              localStorage.setItem('minas_v2_categories', JSON.stringify(categories));
-                              localStorage.setItem('minas_v2_items', JSON.stringify(items));
+                              localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(settings));
+                              localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(categories));
+                              localStorage.setItem(tenantStorageKeys.items, JSON.stringify(items));
                               alert('Todas as alterações foram salvas com sucesso!');
                             }}
                             className="px-4 sm:px-8 py-2 sm:py-4 bg-green-600 hover:bg-green-700 text-white font-black uppercase tracking-widest rounded-xl sm:rounded-2xl shadow-xl shadow-green-600/20 transition-all active:scale-95 flex items-center gap-2 text-[10px] sm:text-xs"
@@ -3044,7 +3486,7 @@ function App() {
                                           setSettings(updatedSettings);
                                           // Force immediate save
                                           try {
-                                            localStorage.setItem('minas_v2_settings', JSON.stringify(updatedSettings));
+                                            localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
                                           } catch (e) {
                                             console.error('Error saving logo:', e);
                                           }
@@ -3157,7 +3599,7 @@ function App() {
                                           setSettings(updatedSettings);
                                           // Force immediate save with automatic cleanup
                                           try {
-                                            localStorage.setItem('minas_v2_settings', JSON.stringify(updatedSettings));
+                                            localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
                                           } catch (e) {
                                             console.error('Error saving hero video:', e);
                                             if (e instanceof DOMException && e.name === 'QuotaExceededError') {
@@ -3167,7 +3609,7 @@ function App() {
                                                 const currentOrders = orders;
                                                 if (currentOrders.length > 5) {
                                                   const recentOrders = currentOrders.slice(0, 5);
-                                                  localStorage.setItem('minas_v2_orders', JSON.stringify(recentOrders));
+                                                  localStorage.setItem(tenantStorageKeys.orders, JSON.stringify(recentOrders));
                                                   setOrders(recentOrders);
                                                   console.log('Cleaned old orders to free space');
                                                 }
@@ -3177,12 +3619,12 @@ function App() {
                                                   ...item,
                                                   image: item.image && item.image.length > 500000 ? undefined : item.image
                                                 }));
-                                                localStorage.setItem('minas_v2_items', JSON.stringify(cleanedItems));
+                                                localStorage.setItem(tenantStorageKeys.items, JSON.stringify(cleanedItems));
                                                 setItems(cleanedItems);
                                                 console.log('Cleaned large images from items');
                                                 
                                                 // Try saving video again
-                                                localStorage.setItem('minas_v2_settings', JSON.stringify(updatedSettings));
+                                                localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
                                                 console.log('Video saved after automatic cleanup');
                                                 alert('Vídeo salvo! Alguns dados antigos foram removidos automaticamente para liberar espaço.');
                                               } catch (retryError) {
@@ -3229,7 +3671,7 @@ function App() {
                                             setSettings(newSettings);
                                             // Force immediate save
                                             try {
-                                              localStorage.setItem('minas_v2_settings', JSON.stringify(newSettings));
+                                              localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(newSettings));
                                             } catch (e) {
                                               console.error('Error saving hero image:', e);
                                             }
@@ -3280,7 +3722,7 @@ function App() {
                                             setSettings(updatedSettings);
                                             // Force immediate save
                                             try {
-                                              localStorage.setItem('minas_v2_settings', JSON.stringify(updatedSettings));
+                                              localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
                                             } catch (e) {
                                               console.error('Error saving aboutImage1:', e);
                                             }
@@ -3376,7 +3818,7 @@ function App() {
                                             setSettings(updatedSettings);
                                             // Force immediate save
                                             try {
-                                              localStorage.setItem('minas_v2_settings', JSON.stringify(updatedSettings));
+                                              localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
                                             } catch (e) {
                                               console.error('Error saving aboutImage2:', e);
                                             }
@@ -4041,7 +4483,7 @@ function App() {
                                   const totalSizeKB = (totalSize / 1024).toFixed(2);
                                   
                                   // Check our specific keys
-                                  const ourKeys = ['minas_v2_categories', 'minas_v2_items', 'minas_v2_settings', 'minas_v2_orders'];
+                                  const ourKeys = [tenantStorageKeys.categories, tenantStorageKeys.items, tenantStorageKeys.settings, tenantStorageKeys.orders];
                                   const ourDataStatus: string[] = [];
                                   
                                   ourKeys.forEach(key => {
@@ -4052,7 +4494,7 @@ function App() {
                                         if (Array.isArray(parsed)) {
                                           ourDataStatus.push(`✅ ${key}: ${parsed.length} item(s)`);
                                         } else if (parsed && typeof parsed === 'object') {
-                                          if (key === 'minas_v2_settings') {
+                                          if (key === tenantStorageKeys.settings) {
                                             ourDataStatus.push(`✅ ${key}: ${parsed.name || 'Sem nome'}`);
                                           } else {
                                             ourDataStatus.push(`✅ ${key}: Existe`);
@@ -4107,7 +4549,7 @@ function App() {
                                   try {
                                     // Keep only last 5 orders
                                     const recentOrders = orders.slice(0, 5);
-                                    localStorage.setItem('minas_v2_orders', JSON.stringify(recentOrders));
+                                    localStorage.setItem(tenantStorageKeys.orders, JSON.stringify(recentOrders));
                                     setOrders(recentOrders);
                                     
                                     // Remove large images from items
@@ -4115,7 +4557,7 @@ function App() {
                                       ...item,
                                       image: item.image && item.image.length > 500000 ? undefined : item.image
                                     }));
-                                    localStorage.setItem('minas_v2_items', JSON.stringify(cleanedItems));
+                                    localStorage.setItem(tenantStorageKeys.items, JSON.stringify(cleanedItems));
                                     setItems(cleanedItems);
                                     
                                     // Remove old localStorage keys
@@ -4136,7 +4578,8 @@ function App() {
                             <button 
                               onClick={() => {
                                 if (confirm('Isso apagará TODAS as suas personalizações e voltará aos dados padrão. Continuar?')) {
-                              localStorage.clear();
+                              [tenantStorageKeys.settings, tenantStorageKeys.categories, tenantStorageKeys.items, tenantStorageKeys.orders, tenantStorageKeys.lastSync, tenantStorageKeys.backup]
+                                .forEach((key) => localStorage.removeItem(key));
                               window.location.reload();
                             }
                           }}
@@ -4150,9 +4593,9 @@ function App() {
                         <div>
                           <button 
                             onClick={() => {
-                              localStorage.setItem('minas_v2_settings', JSON.stringify(settings));
-                              localStorage.setItem('minas_v2_categories', JSON.stringify(categories));
-                              localStorage.setItem('minas_v2_items', JSON.stringify(items));
+                              localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(settings));
+                              localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(categories));
+                              localStorage.setItem(tenantStorageKeys.items, JSON.stringify(items));
                               alert('Todas as alterações foram salvas com sucesso!');
                             }}
                             className="w-full px-6 sm:px-12 py-4 sm:py-6 bg-green-600 hover:bg-green-700 text-white font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] shadow-2xl shadow-green-600/30 transition-all active:scale-95 flex items-center justify-center gap-3 sm:gap-4 text-sm sm:text-base"
@@ -4263,6 +4706,7 @@ function App() {
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                       <div className="space-y-3">
                         <input placeholder="Nome Completo" value={customerName} onChange={e => setCustomerName(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
+                        <input placeholder="E-mail (obrigatório para cartão)" type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
                         <input placeholder="WhatsApp" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
                         <textarea placeholder="Endereço Completo" value={deliveryAddress} onChange={e => setDeliveryAddress(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold h-24 resize-none" />
                         <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-black uppercase text-xs tracking-widest">
@@ -4273,7 +4717,7 @@ function App() {
                         <button onClick={() => setIsCheckoutOpen(false)} className="flex-1 bg-stone-200 text-stone-600 font-black py-5 rounded-[1.5rem] uppercase text-[10px] tracking-widest">Voltar</button>
                         <button 
                           onClick={() => {
-                            if (!customerName || !customerPhone || !deliveryAddress) {
+                            if (!validateCheckoutFields()) {
                               alert('Por favor, preencha todos os campos obrigatórios.');
                               return;
                             }
@@ -4314,6 +4758,7 @@ function App() {
                         <h4 className="font-black text-stone-900 mb-3 uppercase tracking-widest text-xs">Dados de Entrega</h4>
                         <div className="space-y-2 text-sm">
                           <p className="text-stone-700 font-bold"><span className="text-stone-500">Nome:</span> {customerName}</p>
+                          <p className="text-stone-700 font-bold"><span className="text-stone-500">E-mail:</span> {customerEmail || 'Não informado'}</p>
                           <p className="text-stone-700 font-bold"><span className="text-stone-500">WhatsApp:</span> {customerPhone}</p>
                           <p className="text-stone-700 font-bold"><span className="text-stone-500">Endereço:</span> {deliveryAddress}</p>
                         </div>
@@ -4321,16 +4766,160 @@ function App() {
                       <div className="flex gap-4">
                         <button onClick={() => setIsPaymentReviewOpen(false)} className="flex-1 bg-stone-200 text-stone-600 font-black py-5 rounded-[1.5rem] uppercase text-[10px] tracking-widest">Voltar</button>
                         <button 
-                          onClick={placeOrder} 
+                          onClick={handleCheckoutSubmit} 
                           className="flex-[2] bg-green-600 hover:bg-green-700 text-white font-black py-5 rounded-[1.5rem] shadow-xl uppercase text-[10px] tracking-widest transition-all"
                         >
-                          Confirmar e Enviar Pedido
+                          {paymentMethod === 'PIX'
+                            ? 'Gerar Chave PIX'
+                            : isCardPaymentMethod(paymentMethod)
+                              ? 'Pagar com Cartão'
+                              : 'Confirmar e Enviar Pedido'}
                         </button>
                       </div>
                     </motion.div>
                   )}
                 </div>
               )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* PIX Payment Modal */}
+      <AnimatePresence>
+        {pixOrder && (
+          <div className="fixed inset-0 z-[380] flex items-center justify-center p-2 sm:p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setPixOrder(null)}
+              className="absolute inset-0 bg-stone-900/90 backdrop-blur-xl"
+            />
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0, y: 24 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 24 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-xl overflow-hidden rounded-[2rem] bg-white shadow-2xl"
+            >
+              <div className="bg-gradient-to-br from-emerald-50 to-stone-50 px-6 py-8 sm:px-8">
+                <p className="text-emerald-600 font-black uppercase tracking-[0.25em] text-[11px] mb-2">Pagamento via PIX</p>
+                <h3 className="text-3xl font-black tracking-tighter text-stone-900">Copie a chave e conclua o pagamento</h3>
+                <p className="mt-3 text-stone-600 font-bold leading-relaxed">
+                  Assim que você confirmar o pagamento, o pedido entra em produção imediatamente e o prazo estimado é de até 50 minutos.
+                </p>
+              </div>
+
+              <div className="p-6 sm:p-8 space-y-6">
+                <div className="rounded-[2rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                  <p className="text-stone-500 font-black uppercase tracking-[0.25em] text-[10px] mb-3">Chave PIX</p>
+                  <button
+                    onClick={() => void handlePixCopy()}
+                    className="w-full rounded-[1.5rem] bg-white px-5 py-5 text-left shadow-sm border border-emerald-100 hover:border-emerald-300 transition-all"
+                  >
+                    <span className="block text-stone-900 font-black break-all text-lg">{getPixKeyLabel()}</span>
+                    <span className="mt-2 block text-emerald-700 font-bold text-sm">
+                      {pixCopied ? 'Chave copiada. Agora finalize o PIX no seu banco.' : 'Toque para copiar a chave PIX.'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="rounded-[2rem] bg-stone-50 border border-stone-100 p-5 space-y-2 text-sm">
+                  <p className="font-bold text-stone-700"><span className="text-stone-500">Pedido:</span> #{pixOrder.id}</p>
+                  <p className="font-bold text-stone-700"><span className="text-stone-500">Cliente:</span> {pixOrder.customerName}</p>
+                  <p className="font-bold text-stone-700"><span className="text-stone-500">Total:</span> {pixOrder.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setPixOrder(null)}
+                    className="flex-1 bg-stone-200 hover:bg-stone-300 text-stone-700 font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    onClick={() => void confirmPixPayment()}
+                    className="flex-[1.5] bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest shadow-xl transition-all"
+                  >
+                    Já fiz o pagamento
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Card Payment Modal */}
+      <AnimatePresence>
+        {isCardPaymentOpen && cardCheckoutOrder && (
+          <div className="fixed inset-0 z-[390] flex items-center justify-center p-2 sm:p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setIsCardPaymentOpen(false);
+                setCardCheckoutOrder(null);
+                setCardPaymentError(null);
+              }}
+              className="absolute inset-0 bg-stone-900/90 backdrop-blur-xl"
+            />
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0, y: 24 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 24 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-3xl overflow-hidden rounded-[2rem] bg-white shadow-2xl"
+            >
+              <div className="bg-gradient-to-br from-blue-50 to-stone-50 px-6 py-8 sm:px-8">
+                <p className="text-blue-600 font-black uppercase tracking-[0.25em] text-[11px] mb-2">Pagamento no cartão</p>
+                <h3 className="text-3xl font-black tracking-tighter text-stone-900">Finalize com Mercado Pago</h3>
+                <p className="mt-3 text-stone-600 font-bold leading-relaxed">
+                  Assim que o pagamento for aprovado, o restaurante recebe a confirmação e seu pedido entra em produção.
+                </p>
+              </div>
+
+              <div className="p-6 sm:p-8 space-y-5">
+                <div className="rounded-[2rem] bg-stone-50 border border-stone-100 p-5 space-y-2 text-sm">
+                  <p className="font-bold text-stone-700"><span className="text-stone-500">Pedido:</span> #{cardCheckoutOrder.id}</p>
+                  <p className="font-bold text-stone-700"><span className="text-stone-500">Cliente:</span> {cardCheckoutOrder.customerName}</p>
+                  <p className="font-bold text-stone-700"><span className="text-stone-500">E-mail:</span> {customerEmail}</p>
+                  <p className="font-bold text-stone-700"><span className="text-stone-500">Total:</span> {cardCheckoutOrder.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                </div>
+
+                {!isCardBrickReady && !cardPaymentError && (
+                  <div className="rounded-[1.5rem] bg-blue-50 border border-blue-100 px-5 py-4 text-blue-700 font-bold text-sm">
+                    Carregando o formulário seguro do Mercado Pago...
+                  </div>
+                )}
+
+                {cardPaymentError && (
+                  <div className="rounded-[1.5rem] bg-red-50 border border-red-100 px-5 py-4 text-red-600 font-bold text-sm">
+                    {cardPaymentError}
+                  </div>
+                )}
+
+                <div id="cardPaymentBrick_container" className="min-h-24" />
+
+                {isCardSubmitting && (
+                  <div className="rounded-[1.5rem] bg-emerald-50 border border-emerald-100 px-5 py-4 text-emerald-700 font-bold text-sm">
+                    Processando pagamento. Aguarde alguns segundos...
+                  </div>
+                )}
+
+                <button
+                  onClick={() => {
+                    setIsCardPaymentOpen(false);
+                    setCardCheckoutOrder(null);
+                    setCardPaymentError(null);
+                  }}
+                  className="w-full bg-stone-200 hover:bg-stone-300 text-stone-700 font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
+                >
+                  Cancelar
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -4410,6 +4999,9 @@ function App() {
                   </h4>
                   <div className="space-y-2 text-sm">
                     <p className="font-bold text-stone-800"><span className="text-stone-500">Nome:</span> {orderConfirmation.customerName}</p>
+                    {orderConfirmation.customerEmail && (
+                      <p className="font-bold text-stone-800"><span className="text-stone-500">E-mail:</span> {orderConfirmation.customerEmail}</p>
+                    )}
                     <p className="font-bold text-stone-800"><span className="text-stone-500">WhatsApp:</span> {orderConfirmation.customerPhone}</p>
                     <p className="font-bold text-stone-800"><span className="text-stone-500">Endereço:</span> {orderConfirmation.address}</p>
                     <p className="font-bold text-stone-800"><span className="text-stone-500">Pagamento:</span> {orderConfirmation.paymentMethod}</p>

@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { buildTenantEnvKey, resolveTenantId } from '../lib/tenancy.js';
 
 type PersistedData = {
   categories?: unknown[];
@@ -17,6 +18,7 @@ type ApiRequest = {
     settings?: unknown;
     orders?: unknown[];
   };
+  query?: Record<string, string | string[] | undefined>;
 };
 
 type ApiResponse = {
@@ -26,7 +28,7 @@ type ApiResponse = {
   end: () => ApiResponse;
 };
 
-const DATA_FILE_PATH = '/tmp/minas-data.json';
+const DATA_DIRECTORY_PATH = '/tmp/minas-data';
 
 const parseAllowedOrigins = (rawValue: string | undefined) => {
   if (!rawValue) return ['*'];
@@ -49,11 +51,34 @@ const parseAllowedOrigins = (rawValue: string | undefined) => {
   return validOrigins.length > 0 ? validOrigins : ['*'];
 };
 
-const resolveAllowedOrigin = (requestOrigin: string | string[] | undefined) => {
-  const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGIN);
+const getHeaderValue = (value: string | string[] | undefined) =>
+  Array.isArray(value) ? value[0] : value;
+
+const getTenantIdFromRequest = (req: ApiRequest) => {
+  const explicitTenantId =
+    getHeaderValue(req.headers['x-tenant-id']) ??
+    getHeaderValue(req.query?.tenant);
+  const requestHost =
+    getHeaderValue(req.headers['x-forwarded-host']) ??
+    getHeaderValue(req.headers.host) ??
+    getHeaderValue(req.headers.origin);
+
+  return resolveTenantId({
+    hostname: requestHost,
+    explicitTenantId,
+  });
+};
+
+const getAllowedOriginEnvKey = (tenantId: string) =>
+  buildTenantEnvKey('ALLOWED_ORIGIN', tenantId);
+
+const resolveAllowedOrigin = (req: ApiRequest, tenantId: string) => {
+  const allowedOrigins = parseAllowedOrigins(
+    process.env[getAllowedOriginEnvKey(tenantId)] ?? process.env.ALLOWED_ORIGIN,
+  );
   if (allowedOrigins.includes('*')) return '*';
 
-  const origin = Array.isArray(requestOrigin) ? requestOrigin[0] : requestOrigin;
+  const origin = getHeaderValue(req.headers.origin);
   if (origin && allowedOrigins.includes(origin)) {
     return origin;
   }
@@ -61,37 +86,44 @@ const resolveAllowedOrigin = (requestOrigin: string | string[] | undefined) => {
   return allowedOrigins[0];
 };
 
-const readDataStore = async (): Promise<PersistedData> => {
+const getDataFilePath = (tenantId: string) => `${DATA_DIRECTORY_PATH}/${tenantId}.json`;
+
+const readDataStore = async (tenantId: string): Promise<PersistedData> => {
   try {
-    const raw = await fs.readFile(DATA_FILE_PATH, 'utf-8');
+    const raw = await fs.readFile(getDataFilePath(tenantId), 'utf-8');
     return JSON.parse(raw) as PersistedData;
   } catch {
     return {};
   }
 };
 
-const writeDataStore = async (data: PersistedData) => {
-  await fs.writeFile(DATA_FILE_PATH, JSON.stringify(data), 'utf-8');
+const writeDataStore = async (tenantId: string, data: PersistedData) => {
+  await fs.mkdir(DATA_DIRECTORY_PATH, { recursive: true });
+  await fs.writeFile(getDataFilePath(tenantId), JSON.stringify(data), 'utf-8');
 };
+
+const getAdminApiToken = (tenantId: string) =>
+  (process.env[buildTenantEnvKey('ADMIN_API_TOKEN', tenantId)] ?? process.env.ADMIN_API_TOKEN ?? '').trim();
 
 export default async function handler(
   req: ApiRequest,
   res: ApiResponse,
 ) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', resolveAllowedOrigin(req.headers.origin));
+  const tenantId = getTenantIdFromRequest(req);
+
+  res.setHeader('Access-Control-Allow-Origin', resolveAllowedOrigin(req, tenantId));
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-token, x-tenant-id');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   if (req.method === 'GET') {
-    const dataStore = await readDataStore();
-    // Return stored data
+    const dataStore = await readDataStore(tenantId);
     return res.status(200).json({
       success: true,
+      tenantId,
       data: dataStore,
       lastUpdated: dataStore.lastUpdated || null,
     });
@@ -99,12 +131,9 @@ export default async function handler(
 
   if (req.method === 'POST') {
     try {
-      const adminApiToken = typeof process.env.ADMIN_API_TOKEN === 'string'
-        ? process.env.ADMIN_API_TOKEN.trim()
-        : '';
+      const adminApiToken = getAdminApiToken(tenantId);
       if (adminApiToken) {
-        const requestToken = req.headers['x-admin-token'];
-        const token = (Array.isArray(requestToken) ? requestToken[0] : requestToken)?.trim();
+        const token = getHeaderValue(req.headers['x-admin-token'])?.trim();
         if (token !== adminApiToken) {
           return res.status(401).json({
             success: false,
@@ -114,8 +143,6 @@ export default async function handler(
       }
 
       const { categories, items, settings, orders } = req.body ?? {};
-
-      // Validate required data
       if (!categories || !items || !settings) {
         return res.status(400).json({
           success: false,
@@ -131,10 +158,11 @@ export default async function handler(
         lastUpdated: new Date().toISOString(),
       };
 
-      await writeDataStore(dataStore);
+      await writeDataStore(tenantId, dataStore);
 
       return res.status(200).json({
         success: true,
+        tenantId,
         message: 'Data saved successfully',
         lastUpdated: dataStore.lastUpdated,
       });

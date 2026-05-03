@@ -1,0 +1,81 @@
+export type TenantConfig = {
+  id: string;
+  name: string;
+  domains: string[];
+};
+
+const normalizeHost = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '');
+
+export const tenantConfigs: TenantConfig[] = [
+  {
+    id: 'fogao-a-lenha',
+    name: 'Sabor Caseiro',
+    domains: ['localhost', '127.0.0.1', 'saborcaseiro.vercel.app'],
+  },
+  {
+    id: 'cliente-centro',
+    name: 'Cliente Centro',
+    domains: ['clientecentro.com.br', 'www.clientecentro.com.br'],
+  },
+  {
+    id: 'pizzaria-modelo',
+    name: 'Pizzaria Modelo',
+    domains: ['pizzariamodelo.com.br', 'www.pizzariamodelo.com.br'],
+  },
+  {
+    id: 'burger-do-bairro',
+    name: 'Burger do Bairro',
+    domains: ['burgerdobairro.com.br', 'www.burgerdobairro.com.br'],
+  },
+];
+
+export const DEFAULT_TENANT_ID = tenantConfigs[0]?.id ?? 'default';
+
+export const sanitizeTenantId = (value: string | null | undefined) =>
+  (value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+export const findTenantConfigById = (tenantId: string) =>
+  tenantConfigs.find((tenant) => tenant.id === sanitizeTenantId(tenantId));
+
+export const findTenantConfigByHost = (hostname: string) => {
+  const normalizedHost = normalizeHost(hostname);
+  return tenantConfigs.find((tenant) =>
+    tenant.domains.some((domain) => normalizeHost(domain) === normalizedHost),
+  );
+};
+
+export const resolveTenantId = (options: {
+  hostname?: string | null;
+  explicitTenantId?: string | null;
+}) => {
+  const explicitTenantId = sanitizeTenantId(options.explicitTenantId);
+  if (explicitTenantId) {
+    return explicitTenantId;
+  }
+
+  if (options.hostname) {
+    const tenant = findTenantConfigByHost(options.hostname);
+    if (tenant) {
+      return tenant.id;
+    }
+  }
+
+  return DEFAULT_TENANT_ID;
+};
+
+export const buildTenantStorageKey = (tenantId: string, suffix: string) =>
+  `minas_${sanitizeTenantId(tenantId) || DEFAULT_TENANT_ID}_${suffix}`;
+
+export const buildTenantEnvKey = (baseKey: string, tenantId: string) =>
+  `${baseKey}__${sanitizeTenantId(tenantId).replace(/-/g, '_').toUpperCase()}`;

@@ -570,6 +570,8 @@ function App() {
       deliveryFee: latestSettings.deliveryFee,
       minOrder: latestSettings.minOrder,
       paymentMethods: latestSettings.paymentMethods,
+      bankInfo: latestSettings.bankInfo,
+      paymentTokens: latestSettings.paymentTokens,
       logoSize: latestSettings.logoSize,
       logoSizePx: latestSettings.logoSizePx,
       aboutImage1Size: latestSettings.aboutImage1Size,
@@ -710,6 +712,8 @@ function App() {
             // Preserve local images in settings - but only if cloud image is missing
             mergedSettings = {
               ...cloudData.settings,
+              bankInfo: cloudData.settings.bankInfo || localSettings.bankInfo,
+              paymentTokens: cloudData.settings.paymentTokens || localSettings.paymentTokens,
               logo: (cloudData.settings.logo && cloudData.settings.logo.trim() !== '') ? cloudData.settings.logo : (localSettings.logo || ''),
               logoSize: cloudData.settings.logoSize || localSettings.logoSize,
               logoSizePx: cloudData.settings.logoSizePx || localSettings.logoSizePx,
@@ -735,6 +739,8 @@ function App() {
             
             mergedSettings = {
               ...cloudData.settings,
+              bankInfo: cloudData.settings.bankInfo || localSettings.bankInfo,
+              paymentTokens: cloudData.settings.paymentTokens || localSettings.paymentTokens,
               logo: localSettings.logo || '',
               logoSize: cloudData.settings.logoSize || localSettings.logoSize,
               logoSizePx: cloudData.settings.logoSizePx || localSettings.logoSizePx,

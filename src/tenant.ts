@@ -12,6 +12,8 @@ export const currentTenantId = resolveTenantId({
 });
 
 export const currentTenantConfig = findTenantConfigById(currentTenantId);
+export const currentTenantMode = currentTenantConfig?.mode ?? 'production';
+export const currentExperimentalPayments = currentTenantConfig?.experimentalPayments ?? [];
 
 export const tenantStorageKeys = {
   categories: buildTenantStorageKey(currentTenantId, 'categories'),

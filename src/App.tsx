@@ -30,7 +30,7 @@ import {
 import type { MenuItem, Category, RestaurantSettings, Order } from './types';
 import { initialCategories, initialMenuItems, initialSettings } from './data';
 import { motion, AnimatePresence } from 'framer-motion';
-import { currentTenantConfig, currentTenantId, tenantStorageKeys } from './tenant';
+import { currentExperimentalPayments, currentTenantConfig, currentTenantId, currentTenantMode, tenantStorageKeys } from './tenant';
 
 declare global {
   interface Window {
@@ -86,6 +86,7 @@ function App() {
     ? import.meta.env.VITE_NOTIFY_API_TOKEN.trim()
     : '';
   const tenantDisplayName = currentTenantConfig?.name || initialSettings.name;
+  const isLabTenant = currentTenantMode === 'lab';
 
   // Version check for updates
   useEffect(() => {
@@ -384,6 +385,8 @@ function App() {
   const [pixCopied, setPixCopied] = useState(false);
   const [isCardPaymentOpen, setIsCardPaymentOpen] = useState(false);
   const [cardCheckoutOrder, setCardCheckoutOrder] = useState<Order | null>(null);
+  const [isExperimentalPaymentOpen, setIsExperimentalPaymentOpen] = useState(false);
+  const [selectedExperimentalPayment, setSelectedExperimentalPayment] = useState('');
   const [cardPaymentError, setCardPaymentError] = useState<string | null>(null);
   const [isCardBrickReady, setIsCardBrickReady] = useState(false);
   const [isCardSubmitting, setIsCardSubmitting] = useState(false);
@@ -392,6 +395,9 @@ function App() {
   const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '', image: '', available: true });
   const defaultHeroForegroundImage = '/sabor-caseiro-hero.png';
   const heroForegroundImage = settings.heroImage || settings.logo || defaultHeroForegroundImage;
+  const checkoutPaymentMethods = Array.from(
+    new Set([...(settings.paymentMethods || []), ...currentExperimentalPayments]),
+  );
   const latestDataRef = useRef({ categories, items, settings, orders });
   const mercadoPagoScriptPromiseRef = useRef<Promise<void> | null>(null);
   const cardBrickControllerRef = useRef<{ unmount?: () => Promise<void> | void } | null>(null);
@@ -1211,6 +1217,9 @@ function App() {
   const isCardPaymentMethod = (method: string) =>
     method === 'Cartão de Crédito' || method === 'Cartão de Débito';
 
+  const isExperimentalPaymentMethod = (method: string) =>
+    currentExperimentalPayments.includes(method);
+
   const validateCheckoutFields = () => {
     if (!customerName || !customerPhone || !deliveryAddress) {
       alert('Por favor, preencha todos os campos obrigatórios.');
@@ -1219,6 +1228,11 @@ function App() {
 
     if (isCardPaymentMethod(paymentMethod) && !customerEmail.trim()) {
       alert('Informe um e-mail para continuar com o pagamento no cartão.');
+      return false;
+    }
+
+    if (isExperimentalPaymentMethod(paymentMethod) && !isLabTenant) {
+      alert('Este meio de pagamento está liberado apenas no ambiente de homologação.');
       return false;
     }
 
@@ -1478,6 +1492,13 @@ function App() {
     setIsCardPaymentOpen(true);
   };
 
+  const startExperimentalPaymentCheckout = () => {
+    if (!validateCheckoutFields()) return;
+
+    setSelectedExperimentalPayment(paymentMethod);
+    setIsExperimentalPaymentOpen(true);
+  };
+
   const handleCheckoutSubmit = () => {
     if (paymentMethod === 'PIX') {
       void startPixCheckout();
@@ -1486,6 +1507,11 @@ function App() {
 
     if (isCardPaymentMethod(paymentMethod)) {
       void startCardCheckout();
+      return;
+    }
+
+    if (isExperimentalPaymentMethod(paymentMethod)) {
+      startExperimentalPaymentCheckout();
       return;
     }
 
@@ -2267,6 +2293,11 @@ function App() {
             <div className="flex flex-col justify-center min-w-0 flex-1 overflow-hidden pr-1 sm:pr-2">
               <h1 className="text-[11px] sm:text-lg md:text-2xl font-black text-orange-900 leading-tight sm:leading-none tracking-tight mb-0.5 sm:mb-1">{settings.name || 'Sabor Caseiro'}</h1>
               <p className="text-[8px] sm:text-[11px] text-green-700 font-bold tracking-[0.1em] sm:tracking-[0.2em] uppercase">Comida Caseira</p>
+              {isLabTenant && (
+                <p className="mt-1 text-[8px] sm:text-[10px] text-amber-700 font-black tracking-[0.18em] uppercase">
+                  Ambiente de Homologação
+                </p>
+              )}
             </div>
           </div>
 
@@ -4006,7 +4037,7 @@ function App() {
                             <CreditCard size={14} className="text-orange-700" /> Meios de Pagamento
                           </label>
                           <div className="flex flex-wrap gap-3">
-                            {['Dinheiro', 'PIX', 'Cartão de Débito', 'Cartão de Crédito', 'Vale Refeição'].map(method => (
+                            {Array.from(new Set(['Dinheiro', 'PIX', 'Cartão de Débito', 'Cartão de Crédito', 'Vale Refeição', ...currentExperimentalPayments])).map(method => (
                               <button 
                                 key={method}
                                 onClick={() => {
@@ -4716,8 +4747,13 @@ function App() {
                         <input placeholder="WhatsApp" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
                         <textarea placeholder="Endereço Completo" value={deliveryAddress} onChange={e => setDeliveryAddress(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold h-24 resize-none" />
                         <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-black uppercase text-xs tracking-widest">
-                          {(settings.paymentMethods || []).map(m => <option key={m} value={m}>{m}</option>)}
+                          {checkoutPaymentMethods.map(m => <option key={m} value={m}>{m}</option>)}
                         </select>
+                        {isLabTenant && currentExperimentalPayments.length > 0 && (
+                          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold leading-relaxed text-amber-800">
+                            Ambiente de homologação: os meios marcados como teste servem para validar UX e integrações futuras sem impactar o checkout principal.
+                          </div>
+                        )}
                       </div>
                       <div className="flex gap-4">
                         <button onClick={() => setIsCheckoutOpen(false)} className="flex-1 bg-stone-200 text-stone-600 font-black py-5 rounded-[1.5rem] uppercase text-[10px] tracking-widest">Voltar</button>
@@ -4925,6 +4961,69 @@ function App() {
                     className="w-full bg-stone-200 hover:bg-stone-300 text-stone-700 font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
                   >
                     Cancelar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Experimental Payment Modal */}
+      <AnimatePresence>
+        {isExperimentalPaymentOpen && (
+          <div className="fixed inset-0 z-[395] flex items-center justify-center p-2 sm:p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsExperimentalPaymentOpen(false)}
+              className="absolute inset-0 bg-stone-900/90 backdrop-blur-xl"
+            />
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0, y: 24 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 24 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-2xl overflow-hidden rounded-[2rem] bg-white shadow-2xl"
+            >
+              <div className="bg-gradient-to-br from-amber-50 to-stone-50 px-6 py-8 sm:px-8">
+                <p className="mb-2 text-[11px] font-black uppercase tracking-[0.25em] text-amber-700">Checkout Experimental</p>
+                <h3 className="text-3xl font-black tracking-tighter text-stone-900">{selectedExperimentalPayment}</h3>
+                <p className="mt-3 text-stone-600 font-bold leading-relaxed">
+                  Este ambiente foi separado para validar experiência, viabilidade técnica e escolha do gateway antes de levar o recurso para o site principal.
+                </p>
+              </div>
+
+              <div className="space-y-5 p-6 sm:p-8">
+                <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5 text-sm font-bold leading-relaxed text-amber-900">
+                  Aqui a gente valida o fluxo visual e operacional. A implementação real pode seguir por carteira digital na web ou por app próprio com suporte nativo.
+                </div>
+
+                <div className="rounded-[2rem] border border-stone-100 bg-stone-50 p-5">
+                  <h4 className="mb-3 text-xs font-black uppercase tracking-[0.25em] text-stone-500">Próximos passos desse laboratório</h4>
+                  <div className="space-y-2 text-sm font-bold text-stone-700">
+                    <p>1. Confirmar se o gateway escolhido suporta {selectedExperimentalPayment}.</p>
+                    <p>2. Validar UX mobile sem afetar o checkout oficial.</p>
+                    <p>3. Medir se vale seguir por web wallet ou por app próprio.</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setIsExperimentalPaymentOpen(false)}
+                    className="flex-1 bg-stone-200 hover:bg-stone-300 text-stone-700 font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsExperimentalPaymentOpen(false);
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="flex-[1.3] bg-amber-600 hover:bg-amber-700 text-white font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest transition-all"
+                  >
+                    Continuar Planejamento
                   </button>
                 </div>
               </div>

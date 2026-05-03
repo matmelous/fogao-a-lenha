@@ -2,6 +2,8 @@ export type TenantConfig = {
   id: string;
   name: string;
   domains: string[];
+  mode?: 'production' | 'lab';
+  experimentalPayments?: string[];
 };
 
 const normalizeHost = (value: string) =>
@@ -17,6 +19,14 @@ export const tenantConfigs: TenantConfig[] = [
     id: 'fogao-a-lenha',
     name: 'Sabor Caseiro',
     domains: ['localhost', '127.0.0.1', 'saborcaseiro.vercel.app'],
+    mode: 'production',
+  },
+  {
+    id: 'saborcaseiro-lab',
+    name: 'Sabor Caseiro Lab',
+    domains: ['teste.saborcaseiro.vercel.app', 'lab.saborcaseiro.vercel.app'],
+    mode: 'lab',
+    experimentalPayments: ['Apple Pay (Teste)', 'Google Pay (Teste)', 'Aproximação no Celular (Teste)'],
   },
   {
     id: 'cliente-centro',

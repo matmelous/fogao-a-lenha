@@ -94,6 +94,7 @@ Tenants-modelo ja incluidos:
 - `cliente-centro`
 - `pizzaria-modelo`
 - `burger-do-bairro`
+- `saborcaseiro-lab`
 
 Veja tambem:
 
@@ -104,6 +105,7 @@ Veja tambem:
 - [docs/ROTEIRO_IMPLANTACAO.md](/C:/Dev/minas/docs/ROTEIRO_IMPLANTACAO.md:1)
 - [docs/PROPOSTA_COMERCIAL_MODELO.md](/C:/Dev/minas/docs/PROPOSTA_COMERCIAL_MODELO.md:1)
 - [docs/CONTRATO_BASE.md](/C:/Dev/minas/docs/CONTRATO_BASE.md:1)
+- [docs/LAB_PAGAMENTOS.md](/C:/Dev/minas/docs/LAB_PAGAMENTOS.md:1)
 
 Landing page comercial pronta para ajustar e publicar:
 
@@ -123,6 +125,7 @@ Para cada cliente, voce pode apontar um dominio proprio para o mesmo projeto pub
 
 - Tenant padrao: `fogao-a-lenha`
 - Override local: `http://localhost:5173/?tenant=cliente-centro`
+- Laboratorio de pagamentos: `http://localhost:5173/?tenant=saborcaseiro-lab`
 - Assim voce consegue testar varios clientes sem precisar de varios deploys.
 
 ## Checklist de sincronizacao

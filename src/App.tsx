@@ -353,6 +353,23 @@ function App() {
     setIsAdminAuthenticated(false);
     setIsAdminOpen(false);
   };
+
+  const openOrdersAdminPanel = () => {
+    setIncomingOrderAlert(null);
+    setAdminTab('orders');
+
+    if (!isDesktop) {
+      alert('O painel administrativo está disponível apenas em um computador ou notebook.');
+      return;
+    }
+
+    if (!isAdminAuthenticated) {
+      setIsAdminAccessModalOpen(true);
+      return;
+    }
+
+    setIsAdminOpen(true);
+  };
   
   // Check if device is desktop/PC (admin access only on desktop)
   const [isDesktop, setIsDesktop] = useState(false);
@@ -2932,13 +2949,7 @@ function App() {
               </div>
               <div className="mt-6 flex gap-3">
                 <button
-                  onClick={() => {
-                    setIncomingOrderAlert(null);
-                    if (isDesktop && isAdminAuthenticated) {
-                      setIsAdminOpen(true);
-                      setAdminTab('orders');
-                    }
-                  }}
+                  onClick={openOrdersAdminPanel}
                   className="flex-1 px-4 py-3 rounded-2xl bg-orange-700 hover:bg-orange-800 text-white font-black uppercase tracking-widest text-xs transition-all active:scale-95"
                 >
                   Abrir painel de pedidos

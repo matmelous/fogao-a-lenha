@@ -19,6 +19,7 @@ Copie `.env.example` para `.env` e preencha:
 - `NOTIFY_API_TOKEN`: token validado no endpoint `/api/notify-order` (igual ao token do frontend de notificacao).
 - `WA360_API_KEY`: chave da API 360dialog.
 - `WA360_TO_NUMBER`: WhatsApp (com codigo do pais) que recebera alertas de novos pedidos.
+- `WA360_TO_NUMBERS`: lista opcional de WhatsApps (separados por virgula) para receber o mesmo alerta em mais de um numero.
 - `WA360_API_URL`: URL da API da 360dialog (padrao `https://waba-v2.360dialog.io/messages`).
 - `MERCADO_PAGO_ACCESS_TOKEN`: access token usado pelo backend para processar pagamentos no cartao.
 - `STRIPE_SECRET_KEY`: secret key usada pelo laboratorio de Apple Pay / Google Pay via Stripe Checkout.
@@ -32,6 +33,7 @@ Se quiser configurar credenciais ou WhatsApp diferentes por cliente, use o padra
 - `NOTIFY_API_TOKEN__TENANT_ID`
 - `WA360_API_KEY__TENANT_ID`
 - `WA360_TO_NUMBER__TENANT_ID`
+- `WA360_TO_NUMBERS__TENANT_ID`
 - `WA360_API_URL__TENANT_ID`
 - `MERCADO_PAGO_ACCESS_TOKEN__TENANT_ID`
 - `STRIPE_SECRET_KEY__TENANT_ID`
@@ -46,6 +48,7 @@ Exemplo para o tenant `fogao-a-lenha`:
 
 - `VITE_ADMIN_API_TOKEN` e `ADMIN_API_TOKEN` precisam ter exatamente o mesmo valor.
 - `VITE_NOTIFY_API_TOKEN` e `NOTIFY_API_TOKEN` precisam ter exatamente o mesmo valor.
+- Se quiser receber o mesmo pedido em dois aparelhos/contas diferentes, prefira `WA360_TO_NUMBERS` com numeros separados por virgula.
 - Para cartao funcionar, o tenant precisa ter `mercadoPagoPublicKey` salvo no admin e `MERCADO_PAGO_ACCESS_TOKEN` configurado na Vercel.
 - Para PIX funcionar, a `pixKey` precisa estar salva no admin.
 - `ALLOWED_ORIGIN` em producao deve apontar para o dominio publicado.

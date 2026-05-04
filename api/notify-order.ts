@@ -115,6 +115,12 @@ const buildOrderMessage = (order: OrderPayload) => {
 const getTenantEnvValue = (key: string, tenantId: string) =>
   (process.env[buildTenantEnvKey(key, tenantId)] ?? process.env[key] ?? '').trim();
 
+const parseTargetNumbers = (rawValue: string) =>
+  rawValue
+    .split(',')
+    .map((value) => value.replace(/\D/g, '').trim())
+    .filter(Boolean);
+
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   const tenantId = getTenantIdFromRequest(req);
 
@@ -139,11 +145,13 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
   }
 
   const apiKey = getTenantEnvValue('WA360_API_KEY', tenantId);
-  const targetNumber = getTenantEnvValue('WA360_TO_NUMBER', tenantId);
-  if (!apiKey || !targetNumber) {
+  const targetNumbers = parseTargetNumbers(
+    getTenantEnvValue('WA360_TO_NUMBERS', tenantId) || getTenantEnvValue('WA360_TO_NUMBER', tenantId),
+  );
+  if (!apiKey || targetNumbers.length === 0) {
     return res.status(500).json({
       success: false,
-      error: 'WA360_API_KEY or WA360_TO_NUMBER is not configured',
+      error: 'WA360_API_KEY and WA360_TO_NUMBER or WA360_TO_NUMBERS must be configured',
     });
   }
 
@@ -153,35 +161,43 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
   }
 
   const endpoint = getTenantEnvValue('WA360_API_URL', tenantId) || 'https://waba-v2.360dialog.io/messages';
-  const body = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: targetNumber,
-    type: 'text',
-    text: {
-      body: buildOrderMessage(order),
-    },
-  };
+  const messageBody = buildOrderMessage(order);
 
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'D360-API-KEY': apiKey,
-      },
-      body: JSON.stringify(body),
-    });
+    const failures: string[] = [];
 
-    if (!response.ok) {
-      const errorText = await response.text();
+    for (const targetNumber of targetNumbers) {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'D360-API-KEY': apiKey,
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: targetNumber,
+          type: 'text',
+          text: {
+            body: messageBody,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        failures.push(`${targetNumber}: ${response.status} ${errorText.slice(0, 160)}`);
+      }
+    }
+
+    if (failures.length > 0) {
       return res.status(502).json({
         success: false,
-        error: `360dialog request failed: ${response.status} ${errorText.slice(0, 200)}`,
+        error: `360dialog request failed for ${failures.length} recipient(s): ${failures.join(' | ')}`,
       });
     }
 
-    return res.status(200).json({ success: true, tenantId });
+    return res.status(200).json({ success: true, tenantId, recipients: targetNumbers.length });
   } catch (error) {
     return res.status(500).json({
       success: false,

@@ -1150,7 +1150,7 @@ function App() {
   const playOrderAlarm = () => {
     try {
       const audioContext = new window.AudioContext();
-      const sequence = [880, 660, 880, 660];
+      const sequence = [988, 740, 988, 740, 988, 740];
       sequence.forEach((frequency, index) => {
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
@@ -1158,10 +1158,10 @@ function App() {
         oscillator.frequency.value = frequency;
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
-        const start = audioContext.currentTime + index * 0.18;
-        const end = start + 0.14;
+        const start = audioContext.currentTime + index * 0.22;
+        const end = start + 0.18;
         gainNode.gain.setValueAtTime(0.0001, start);
-        gainNode.gain.exponentialRampToValueAtTime(0.18, start + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.34, start + 0.02);
         gainNode.gain.exponentialRampToValueAtTime(0.0001, end);
         oscillator.start(start);
         oscillator.stop(end);
@@ -1294,13 +1294,28 @@ function App() {
   const persistOrder = async (
     order: Order,
     notificationType: 'new_order' | 'payment_confirmed' = 'new_order',
-    fallbackMessage?: string,
+    options?: {
+      fallbackMessage?: string;
+      openWhatsappFallback?: boolean;
+      failureAlertMessage?: string;
+    },
   ) => {
     setOrders(prev => [order, ...prev]);
     const notifySucceeded = await notifyOrderByWhatsapp(order, notificationType);
-    if (!notifySucceeded && fallbackMessage) {
-      openRestaurantWhatsappFallback(fallbackMessage);
+    if (notifySucceeded) {
+      return true;
     }
+
+    if (options?.openWhatsappFallback !== false && options?.fallbackMessage) {
+      openRestaurantWhatsappFallback(options.fallbackMessage);
+      return false;
+    }
+
+    if (options?.failureAlertMessage) {
+      alert(options.failureAlertMessage);
+    }
+
+    return false;
   };
 
   const updateExistingOrder = (orderId: string, updates: Partial<Order>) => {
@@ -1311,7 +1326,14 @@ function App() {
     )));
   };
 
-  const finalizeSuccessfulOrder = async (order: Order, paymentLabel: string) => {
+  const finalizeSuccessfulOrder = async (
+    order: Order,
+    paymentLabel: string,
+    options?: {
+      openWhatsappFallback?: boolean;
+      failureAlertMessage?: string;
+    },
+  ) => {
     const updatedOrder: Order = {
       ...order,
       status: 'preparing',
@@ -1332,7 +1354,11 @@ function App() {
 
     const notifySucceeded = await notifyOrderByWhatsapp(updatedOrder, 'payment_confirmed');
     if (!notifySucceeded) {
-      openRestaurantWhatsappFallback(paymentConfirmedMessage);
+      if (options?.openWhatsappFallback !== false) {
+        openRestaurantWhatsappFallback(paymentConfirmedMessage);
+      } else if (options?.failureAlertMessage) {
+        alert(options.failureAlertMessage);
+      }
     }
 
     setPixOrder(null);
@@ -1474,9 +1500,13 @@ function App() {
       status: 'pending',
     });
 
-    await persistOrder(newOrder, 'new_order', buildOrderWhatsappMessage(newOrder, 'PIX - aguardando confirmação'));
     setPixCopied(false);
     setPixOrder(newOrder);
+    await persistOrder(newOrder, 'new_order', {
+      fallbackMessage: buildOrderWhatsappMessage(newOrder, 'PIX - aguardando confirmação'),
+      openWhatsappFallback: false,
+      failureAlertMessage: 'Seu pedido foi registrado e a chave PIX já está disponível para cópia. Se o restaurante não receber a notificação automática, confirme o pagamento e entre em contato em seguida.',
+    });
   };
 
   const handlePixCopy = async () => {
@@ -1491,7 +1521,10 @@ function App() {
 
   const confirmPixPayment = async () => {
     if (!pixOrder) return;
-    await finalizeSuccessfulOrder(pixOrder, 'PIX aprovado');
+    await finalizeSuccessfulOrder(pixOrder, 'PIX aprovado', {
+      openWhatsappFallback: false,
+      failureAlertMessage: 'Seu pagamento foi marcado como confirmado, mas não foi possível avisar o restaurante automaticamente. Entre em contato com o restaurante para garantir o andamento do pedido.',
+    });
   };
 
   const startCardCheckout = async () => {
@@ -1691,7 +1724,9 @@ function App() {
               await persistOrder(
                 paidOrder,
                 'new_order',
-                buildOrderWhatsappMessage(paidOrder, `${paymentMethod} aprovado`),
+                {
+                  fallbackMessage: buildOrderWhatsappMessage(paidOrder, `${paymentMethod} aprovado`),
+                },
               );
 
               setIsCardPaymentOpen(false);
@@ -1786,7 +1821,9 @@ function App() {
           await persistOrder(
             pendingOrder,
             'new_order',
-            buildOrderWhatsappMessage(pendingOrder, `${wallet} aprovado`),
+            {
+              fallbackMessage: buildOrderWhatsappMessage(pendingOrder, `${wallet} aprovado`),
+            },
           );
           await finalizeSuccessfulOrder(
             {

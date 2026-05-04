@@ -285,6 +285,25 @@ function App() {
       }
     }
   }, [settings]);
+
+  useEffect(() => {
+    if (currentTenantId !== 'saborcaseiro-lab') return;
+
+    const testItemId = 'lab-item-teste';
+    const alreadyExists = items.some((item) => item.id === testItemId);
+    if (alreadyExists) return;
+
+    const testItem: MenuItem = {
+      id: testItemId,
+      name: 'Teste',
+      description: 'Produto de homologação para validar checkout e carteiras digitais.',
+      price: 2,
+      category: categories[0]?.id || '1',
+      available: true,
+    };
+
+    setItems((prev) => [...prev, testItem]);
+  }, [categories, items]);
   
   const handleAdminLogin = () => {
     if (!isDesktop) return;

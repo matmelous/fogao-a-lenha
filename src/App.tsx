@@ -1530,7 +1530,7 @@ function App() {
     await persistOrder(newOrder, 'new_order', {
       fallbackMessage: buildOrderWhatsappMessage(newOrder, 'PIX - aguardando confirmação'),
       openWhatsappFallback: false,
-      failureAlertMessage: 'Seu pedido foi registrado e a chave PIX já está disponível para cópia. Se o restaurante não receber a notificação automática, confirme o pagamento e entre em contato em seguida.',
+      failureAlertMessage: 'Seu pedido foi enviado. Agora confirme seu pagamento compartilhando o comprovante para o numero: 42 991417956',
     });
   };
 

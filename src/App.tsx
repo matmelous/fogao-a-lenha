@@ -1247,6 +1247,12 @@ function App() {
       `_Pedido realizado via Site_`;
   };
 
+  const buildPaymentConfirmedWhatsappMessage = (order: Order, paymentLabel: string) => {
+    return buildOrderWhatsappMessage(order, paymentLabel) +
+      `\n\n*Status do pagamento:* Confirmado` +
+      `\n*Produção:* Liberada pelo cliente`;
+  };
+
   const openRestaurantWhatsappFallback = (message: string) => {
     window.open(getRestaurantWhatsappUrl(message), '_blank');
   };
@@ -1369,10 +1375,12 @@ function App() {
       `Total: R$ ${updatedOrder.total.toFixed(2)}\n\n` +
       `Pedido liberado para produção.`;
 
+    void paymentConfirmedMessage;
+    const paymentConfirmedFallbackMessage = buildPaymentConfirmedWhatsappMessage(updatedOrder, paymentLabel);
     const notifySucceeded = await notifyOrderByWhatsapp(updatedOrder, 'payment_confirmed');
     if (!notifySucceeded) {
       if (options?.openWhatsappFallback !== false) {
-        openRestaurantWhatsappFallback(paymentConfirmedMessage);
+        openRestaurantWhatsappFallback(paymentConfirmedFallbackMessage);
       } else if (options?.failureAlertMessage) {
         alert(options.failureAlertMessage);
       }
@@ -1539,7 +1547,7 @@ function App() {
   const confirmPixPayment = async () => {
     if (!pixOrder) return;
     await finalizeSuccessfulOrder(pixOrder, 'PIX aprovado', {
-      openWhatsappFallback: false,
+      openWhatsappFallback: true,
       failureAlertMessage: 'Seu pagamento foi marcado como confirmado, mas não foi possível avisar o restaurante automaticamente. Entre em contato com o restaurante para garantir o andamento do pedido.',
     });
   };
@@ -1743,6 +1751,7 @@ function App() {
                 'new_order',
                 {
                   fallbackMessage: buildOrderWhatsappMessage(paidOrder, `${paymentMethod} aprovado`),
+                  openWhatsappFallback: false,
                 },
               );
 

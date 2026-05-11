@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { 
   ShoppingCart, 
   Settings, 
@@ -30,7 +31,15 @@ import {
 import type { MenuItem, Category, RestaurantSettings, Order } from './types';
 import { initialCategories, initialMenuItems, initialSettings } from './data';
 import { motion, AnimatePresence } from 'framer-motion';
-import { currentExperimentalPayments, currentTenantConfig, currentTenantId, currentTenantMode, tenantStorageKeys } from './tenant';
+import {
+  currentExperimentalPayments,
+  currentTenantConfig,
+  currentTenantId,
+  currentTenantMode,
+  tenantStorageKeys,
+  tenantStorageLegacyKeys,
+} from './tenant';
+import { buildPrintableOrderHtml } from './orderPrint';
 
 declare global {
   interface Window {
@@ -76,6 +85,19 @@ const getLegacyStorageKey = (key: string) => {
   return '';
 };
 
+const getStorageCandidates = (primaryKey: string, legacyCandidates: string[] = []) => {
+  const candidates = [primaryKey];
+  const legacyKey = getLegacyStorageKey(primaryKey);
+
+  if (legacyKey) {
+    candidates.push(legacyKey);
+  }
+
+  candidates.push(...legacyCandidates);
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+};
+
 function App() {
   const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD;
   const normalizedAdminPassword = typeof adminPassword === 'string' ? adminPassword.trim() : '';
@@ -87,6 +109,11 @@ function App() {
     : '';
   const tenantDisplayName = currentTenantConfig?.name || initialSettings.name;
   const isLabTenant = currentTenantMode === 'lab';
+  const isNativeApp = Capacitor.isNativePlatform();
+  const mobileAdminOverridePassword = '962458';
+  const deployedAppUrl = (typeof import.meta.env.VITE_APP_PUBLIC_URL === 'string'
+    ? import.meta.env.VITE_APP_PUBLIC_URL
+    : 'https://saborcaseiro.vercel.app').trim().replace(/\/$/, '');
 
   // Version check for updates
   useEffect(() => {
@@ -122,7 +149,7 @@ function App() {
           
           // Compare with stored build hash
           if (storedBuildTime !== currentBuildHash || storedVersion !== APP_VERSION) {
-            console.log('🔄 New version detected!', { 
+            console.log('ðŸ”„ New version detected!', { 
               storedVersion, 
               newVersion: APP_VERSION,
               storedBuildTime,
@@ -202,16 +229,39 @@ function App() {
   // Persistence initialization
   const getStoredData = <T,>(key: string, initial: T): T => {
     try {
-    const stored = localStorage.getItem(key);
-    if (!stored) {
-      const legacyKey = getLegacyStorageKey(key);
-      if (!legacyKey) return initial;
-      const legacyStored = localStorage.getItem(legacyKey);
-      if (!legacyStored) return initial;
-      localStorage.setItem(key, legacyStored);
-      return JSON.parse(legacyStored) as T;
-    }
-      const parsed = JSON.parse(stored);
+      if (
+        isNativeApp &&
+        (
+          key === tenantStorageKeys.categories ||
+          key === tenantStorageKeys.items ||
+          key === tenantStorageKeys.settings ||
+          key === tenantStorageKeys.orders
+        )
+      ) {
+        return initial;
+      }
+
+      const legacyCandidates =
+        key === tenantStorageKeys.categories ? tenantStorageLegacyKeys.categories :
+        key === tenantStorageKeys.items ? tenantStorageLegacyKeys.items :
+        key === tenantStorageKeys.settings ? tenantStorageLegacyKeys.settings :
+        key === tenantStorageKeys.orders ? tenantStorageLegacyKeys.orders :
+        key === tenantStorageKeys.lastSync ? tenantStorageLegacyKeys.lastSync :
+        key === tenantStorageKeys.backup ? tenantStorageLegacyKeys.backup :
+        key === tenantStorageKeys.version ? tenantStorageLegacyKeys.version :
+        key === tenantStorageKeys.buildTime ? tenantStorageLegacyKeys.buildTime :
+        key === tenantStorageKeys.pendingStripeOrder ? tenantStorageLegacyKeys.pendingStripeOrder :
+        [];
+
+      const storedEntry = getStorageCandidates(key, legacyCandidates)
+        .map((candidate) => ({ candidate, value: localStorage.getItem(candidate) }))
+        .find((entry) => entry.value);
+
+      if (!storedEntry?.value) return initial;
+      if (storedEntry.candidate !== key) {
+        localStorage.setItem(key, storedEntry.value);
+      }
+      const parsed = JSON.parse(storedEntry.value);
       // No migration - allow any name
       return parsed;
     } catch (error) {
@@ -220,40 +270,52 @@ function App() {
     }
   };
 
-  const [categories, setCategories] = useState<Category[]>(() => getStoredData(tenantStorageKeys.categories, initialCategories));
-  const [items, setItems] = useState<MenuItem[]>(() => getStoredData(tenantStorageKeys.items, initialMenuItems));
-  const [settings, setSettings] = useState<RestaurantSettings>(() => getStoredData(tenantStorageKeys.settings, initialSettings));
-  const [orders, setOrders] = useState<Order[]>(() => getStoredData(tenantStorageKeys.orders, []));
+  const [categories, setCategories] = useState<Category[]>(() =>
+    isNativeApp ? initialCategories : getStoredData(tenantStorageKeys.categories, initialCategories),
+  );
+  const [items, setItems] = useState<MenuItem[]>(() =>
+    isNativeApp ? initialMenuItems : getStoredData(tenantStorageKeys.items, initialMenuItems),
+  );
+  const [settings, setSettings] = useState<RestaurantSettings>(() =>
+    isNativeApp ? initialSettings : getStoredData(tenantStorageKeys.settings, initialSettings),
+  );
+  const [orders, setOrders] = useState<Order[]>(() =>
+    isNativeApp ? [] : getStoredData(tenantStorageKeys.orders, []),
+  );
   const [isInitialized, setIsInitialized] = useState(false);
   const [lastSyncStatus, setLastSyncStatus] = useState<{ success: boolean; time: string | null; error?: string }>({ success: false, time: null });
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
   const [incomingOrderAlert, setIncomingOrderAlert] = useState<Order | null>(null);
   const latestOrderSignatureRef = useRef<string | null>(null);
+  const orderAlarmTimeoutsRef = useRef<number[]>([]);
   
   // Admin authentication - only you have access
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [isAdminAccessModalOpen, setIsAdminAccessModalOpen] = useState(false);
+  const [adminAccessTarget, setAdminAccessTarget] = useState<'desktop' | 'mobile-menu'>('desktop');
+  const [isMobileMenuAdminOpen, setIsMobileMenuAdminOpen] = useState(false);
+  const [mobileMenuAdminTab, setMobileMenuAdminTab] = useState<'items' | 'categories'>('items');
   const [adminAccessPassword, setAdminAccessPassword] = useState('');
   const adminTapCountRef = useRef(0);
   const adminTapTimeoutRef = useRef<number | null>(null);
   
   // Auto-update restaurant name if it's the old one
   useEffect(() => {
-    if (settings.name === 'Fogão & Sabor' || settings.name === 'Fogao & Sabor') {
-      const updatedSettings = { ...settings, name: 'Sabor Caseiro' };
+    if (settings.name === 'FogÃ£o & Sabor' || settings.name === 'Fogao & Sabor') {
+      const updatedSettings = { ...settings, name: 'Granatto' };
       setSettings(updatedSettings);
       try {
         localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
-        console.log('✅ Restaurant name updated from "Fogão & Sabor" to "Sabor Caseiro"');
+        console.log('âœ… Restaurant name updated from "FogÃ£o & Sabor" to "Granatto"');
       } catch (e) {
         console.error('Error updating restaurant name:', e);
       }
     }
   }, [settings]);
 
-  // Initialize bankInfo and paymentTokens if they don't exist
+  // Initialize bankInfo, paymentTokens and printing settings if they don't exist
   useEffect(() => {
-    if (!settings.bankInfo || !settings.paymentTokens) {
+    if (!settings.bankInfo || !settings.paymentTokens || !settings.printing || !settings.storefrontText) {
       const updatedSettings = {
         ...settings,
         bankInfo: settings.bankInfo || {
@@ -276,12 +338,20 @@ function App() {
           stripePublicKey: '',
           otherTokens: [],
         },
+        printing: {
+          autoPrintNewOrders: settings.printing?.autoPrintNewOrders || false,
+          paperWidthMm: settings.printing?.paperWidthMm || 80,
+        },
+        storefrontText: {
+          ...(initialSettings.storefrontText || {}),
+          ...(settings.storefrontText || {}),
+        },
       };
       setSettings(updatedSettings);
       try {
         localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
       } catch (e) {
-        console.error('Error initializing bank info and payment tokens:', e);
+        console.error('Error initializing restaurant settings:', e);
       }
     }
   }, [settings]);
@@ -296,7 +366,7 @@ function App() {
     const testItem: MenuItem = {
       id: testItemId,
       name: 'Teste',
-      description: 'Produto de homologação para validar checkout e carteiras digitais.',
+      description: 'Produto de homologaÃ§Ã£o para validar checkout e carteiras digitais.',
       price: 2,
       category: categories[0]?.id || '1',
       available: true,
@@ -307,6 +377,7 @@ function App() {
   
   const handleAdminLogin = () => {
     if (!isDesktop) return;
+    setAdminAccessTarget('desktop');
     setAdminAccessPassword('');
     setIsAdminAccessModalOpen(true);
   };
@@ -318,9 +389,17 @@ function App() {
       return;
     }
     const typedPassword = adminAccessPassword.trim();
-    if (typedPassword === normalizedAdminPassword) {
+    const passwordAccepted =
+      typedPassword === normalizedAdminPassword ||
+      (isNativeApp && typedPassword === mobileAdminOverridePassword);
+
+    if (passwordAccepted) {
       setIsAdminAuthenticated(true);
-      setIsAdminOpen(true);
+      if (adminAccessTarget === 'mobile-menu') {
+        setIsMobileMenuAdminOpen(true);
+      } else {
+        setIsAdminOpen(true);
+      }
       setIsAdminAccessModalOpen(false);
       setAdminAccessPassword('');
     } else {
@@ -352,6 +431,19 @@ function App() {
   const handleAdminLogout = () => {
     setIsAdminAuthenticated(false);
     setIsAdminOpen(false);
+    setIsMobileMenuAdminOpen(false);
+  };
+
+  const openMobileMenuAdmin = () => {
+    setAdminAccessTarget('mobile-menu');
+    setAdminAccessPassword('');
+
+    if (isAdminAuthenticated) {
+      setIsMobileMenuAdminOpen(true);
+      return;
+    }
+
+    setIsAdminAccessModalOpen(true);
   };
 
   const openOrdersAdminPanel = () => {
@@ -359,7 +451,7 @@ function App() {
     setAdminTab('orders');
 
     if (!isDesktop) {
-      alert('O painel administrativo está disponível apenas em um computador ou notebook.');
+      alert('O painel administrativo estÃ¡ disponÃ­vel apenas em um computador ou notebook.');
       return;
     }
 
@@ -404,8 +496,25 @@ function App() {
       if (adminTapTimeoutRef.current) {
         window.clearTimeout(adminTapTimeoutRef.current);
       }
+      orderAlarmTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     };
   }, []);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
   const [cart, setCart] = useState<{ item: MenuItem; quantity: number }[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
@@ -416,6 +525,7 @@ function App() {
   const [orderConfirmation, setOrderConfirmation] = useState<Order | null>(null);
   const [pixOrder, setPixOrder] = useState<Order | null>(null);
   const [pixCopied, setPixCopied] = useState(false);
+  const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItem | null>(null);
   const [isCardPaymentOpen, setIsCardPaymentOpen] = useState(false);
   const [cardCheckoutOrder, setCardCheckoutOrder] = useState<Order | null>(null);
   const [isExperimentalPaymentOpen, setIsExperimentalPaymentOpen] = useState(false);
@@ -426,8 +536,13 @@ function App() {
   const [isNewItemModalOpen, setIsNewItemModalOpen] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [newItemForm, setNewItemForm] = useState({ name: '', price: '', description: '', category: '', image: '', available: true });
+  const defaultLogoImage = '/marmitaria.png';
   const defaultHeroForegroundImage = '/sabor-caseiro-hero.png';
-  const heroForegroundImage = settings.heroImage || settings.logo || defaultHeroForegroundImage;
+  const heroForegroundImage = settings.logo || settings.heroImage || defaultHeroForegroundImage;
+  const storefrontText = {
+    ...(initialSettings.storefrontText || {}),
+    ...(settings.storefrontText || {}),
+  };
   const checkoutPaymentMethods = Array.from(
     new Set([...(settings.paymentMethods || []), ...currentExperimentalPayments]),
   );
@@ -436,8 +551,37 @@ function App() {
   const cardBrickControllerRef = useRef<{ unmount?: () => Promise<void> | void } | null>(null);
 
   useEffect(() => {
+    if (!selectedMenuItem) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [selectedMenuItem]);
+
+  useEffect(() => {
     latestDataRef.current = { categories, items, settings, orders };
   }, [categories, items, settings, orders]);
+
+  useEffect(() => {
+    const nextSettings: RestaurantSettings = { ...settings };
+    let shouldUpdate = false;
+
+    if (!settings.logo || settings.logo === '/menu/logo-sabor-caseiro.jpg' || settings.logo === '/icon-sabor-caseiro.svg') {
+      nextSettings.logo = defaultLogoImage;
+      shouldUpdate = true;
+    }
+
+    if (!settings.heroImage) {
+      nextSettings.heroImage = defaultHeroForegroundImage;
+      shouldUpdate = true;
+    }
+
+    if (!shouldUpdate) return;
+    setSettings(nextSettings);
+  }, [settings, defaultHeroForegroundImage, defaultLogoImage]);
 
 
   const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.7): Promise<string> => {
@@ -534,12 +678,28 @@ function App() {
   }, [settings.name, tenantDisplayName]);
 
   // Sync functions
+  const getAppBaseUrl = () => {
+    if (isNativeApp && deployedAppUrl) {
+      return deployedAppUrl;
+    }
+
+    return window.location.origin;
+  };
+
   const getApiUrl = () => {
-    return `${window.location.origin}/api/data`;
+    return `${getAppBaseUrl()}/api/data`;
   };
 
   const getStripeCheckoutApiUrl = () => {
-    return `${window.location.origin}/api/create-stripe-checkout`;
+    return `${getAppBaseUrl()}/api/create-stripe-checkout`;
+  };
+
+  const getNotifyOrderApiUrl = () => {
+    return `${getAppBaseUrl()}/api/notify-order`;
+  };
+
+  const getProcessPaymentApiUrl = () => {
+    return `${getAppBaseUrl()}/api/process-payment`;
   };
 
   const getApiAuthHeaders = () => {
@@ -615,6 +775,7 @@ function App() {
       paymentMethods: latestSettings.paymentMethods,
       bankInfo: latestSettings.bankInfo,
       paymentTokens: latestSettings.paymentTokens,
+      storefrontText: latestSettings.storefrontText,
       logoSize: latestSettings.logoSize,
       logoSizePx: latestSettings.logoSizePx,
       aboutImage1Size: latestSettings.aboutImage1Size,
@@ -650,17 +811,17 @@ function App() {
       const payloadSizeKB = new Blob([payloadString]).size / 1024;
       const payloadSizeMB = payloadSizeKB / 1024;
       
-      console.log(`📦 Sync payload size: ${payloadSizeKB.toFixed(2)}KB (${payloadSizeMB.toFixed(2)}MB)`);
-      console.log(`📸 Images are compressed for sync (400px max, 40% quality)`);
+      console.log(`ðŸ“¦ Sync payload size: ${payloadSizeKB.toFixed(2)}KB (${payloadSizeMB.toFixed(2)}MB)`);
+      console.log(`ðŸ“¸ Images are compressed for sync (400px max, 40% quality)`);
       
       // Vercel has a 4.5MB limit for serverless functions
       // If still too large, limit orders to last 100
       if (payloadSizeMB > 3.5) {
-        console.warn('⚠️ Payload still large, limiting orders to last 100');
+        console.warn('âš ï¸ Payload still large, limiting orders to last 100');
         optimizedData.orders = (optimizedData.orders || []).slice(-100);
         const newPayloadString = JSON.stringify(optimizedData);
         const newPayloadSizeKB = new Blob([newPayloadString]).size / 1024;
-        console.log(`📦 Optimized payload size: ${newPayloadSizeKB.toFixed(2)}KB`);
+        console.log(`ðŸ“¦ Optimized payload size: ${newPayloadSizeKB.toFixed(2)}KB`);
       }
       
       const response = await fetch(getApiUrl(), {
@@ -675,10 +836,10 @@ function App() {
       // Check if response is ok before parsing JSON
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`❌ HTTP ${response.status} Error:`, errorText.substring(0, 200));
+        console.error(`âŒ HTTP ${response.status} Error:`, errorText.substring(0, 200));
         
         if (response.status === 413) {
-          console.error('❌ Payload too large! Current size:', payloadSizeMB.toFixed(2), 'MB');
+          console.error('âŒ Payload too large! Current size:', payloadSizeMB.toFixed(2), 'MB');
           throw new Error(`Payload muito grande (${payloadSizeMB.toFixed(2)}MB). Limite do Vercel: 4.5MB. Tente limpar pedidos antigos.`);
         }
         
@@ -799,9 +960,9 @@ function App() {
           }
           
           // Auto-update restaurant name if it's the old one
-          if (mergedSettings.name === 'Fogão & Sabor' || mergedSettings.name === 'Fogao & Sabor') {
-            mergedSettings.name = 'Sabor Caseiro';
-            console.log('✅ Restaurant name updated from cloud data: "Fogão & Sabor" → "Sabor Caseiro"');
+          if (mergedSettings.name === 'FogÃ£o & Sabor' || mergedSettings.name === 'Fogao & Sabor') {
+            mergedSettings.name = 'Granatto';
+            console.log('âœ… Restaurant name updated from cloud data: "FogÃ£o & Sabor" â†’ "Granatto"');
           }
           
           setCategories(cloudData.categories);
@@ -837,7 +998,9 @@ function App() {
   // Load last sync status from localStorage
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(tenantStorageKeys.lastSync) ?? localStorage.getItem(legacyStorageKeys.lastSync);
+      const stored = getStorageCandidates(tenantStorageKeys.lastSync, tenantStorageLegacyKeys.lastSync)
+        .map((key) => localStorage.getItem(key))
+        .find(Boolean);
       if (stored) {
         const syncData = JSON.parse(stored);
         if (syncData.time) {
@@ -869,7 +1032,7 @@ function App() {
         timestamp: new Date().toISOString()
       };
       localStorage.setItem(tenantStorageKeys.backup, JSON.stringify(backup));
-      console.log('✅ Backup created:', backup.timestamp);
+      console.log('âœ… Backup created:', backup.timestamp);
     } catch (error) {
       console.error('Error creating backup:', error);
     }
@@ -877,6 +1040,11 @@ function App() {
 
   // Load from cloud on mount - preserve local images
   useEffect(() => {
+    if (isNativeApp) {
+      setIsInitialized(true);
+      return;
+    }
+
     let lastCloudUpdate: string | null = null;
     
     const checkCloudUpdates = async () => {
@@ -906,11 +1074,11 @@ function App() {
             if (wasNew) {
               // Don't auto-update if admin panel is open to prevent overwriting local edits
               if (isAdminOpenRef.current) {
-                console.log('🔄 New data detected in cloud, but admin panel is open. Skipping auto-update to prevent overwriting edits.');
+                console.log('ðŸ”„ New data detected in cloud, but admin panel is open. Skipping auto-update to prevent overwriting edits.');
                 return;
               }
               
-              console.log('🔄 New data detected in cloud, updating...');
+              console.log('ðŸ”„ New data detected in cloud, updating...');
               await loadFromCloud(true);
               
               // Show a subtle notification that data was updated
@@ -958,7 +1126,7 @@ function App() {
       window.removeEventListener('focus', handleFocus);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isNativeApp]);
 
   // Close category dropdown when clicking outside
   useEffect(() => {
@@ -977,7 +1145,7 @@ function App() {
 
   // Auto-sync to cloud when data changes (debounced)
   useEffect(() => {
-    if (!isInitialized || !isDesktop || !isAdminAuthenticated) return;
+    if (!isInitialized || !isAdminAuthenticated || isNativeApp) return;
     
     const syncTimeout = setTimeout(() => {
       syncToCloud();
@@ -985,7 +1153,7 @@ function App() {
 
     return () => clearTimeout(syncTimeout);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categories, items, settings, isInitialized, isDesktop, isAdminAuthenticated]);
+  }, [categories, items, settings, isInitialized, isDesktop, isAdminAuthenticated, isNativeApp]);
 
   // No forced migration - allow any name
 
@@ -1000,8 +1168,13 @@ function App() {
     // Check if we need to recover or add "Prato do Dia"
     const checkAndRecover = () => {
       try {
-        const backupStr = localStorage.getItem(tenantStorageKeys.backup) ?? localStorage.getItem(legacyStorageKeys.backup);
-        const currentCategories = JSON.parse(localStorage.getItem(tenantStorageKeys.categories) || localStorage.getItem(legacyStorageKeys.categories) || '[]');
+        const backupStr = getStorageCandidates(tenantStorageKeys.backup, tenantStorageLegacyKeys.backup)
+          .map((key) => localStorage.getItem(key))
+          .find(Boolean);
+        const currentCategoriesStored = getStorageCandidates(tenantStorageKeys.categories, tenantStorageLegacyKeys.categories)
+          .map((key) => localStorage.getItem(key))
+          .find(Boolean);
+        const currentCategories = JSON.parse(currentCategoriesStored || '[]');
         const hasPratoDoDia = currentCategories.some((cat: Category) => 
           cat.name && cat.name.toLowerCase().includes('prato') && cat.name.toLowerCase().includes('dia')
         );
@@ -1014,7 +1187,7 @@ function App() {
           
           if (backupHasPratoDoDia) {
             // Recover from backup
-            console.log('🔄 Recovering "Prato do Dia" category from backup...');
+            console.log('ðŸ”„ Recovering "Prato do Dia" category from backup...');
             setCategories(backup.categories);
             setItems(backup.items);
             setSettings(backup.settings);
@@ -1025,7 +1198,7 @@ function App() {
         
         // If no backup or backup doesn't have it, add the category
         if (!hasPratoDoDia) {
-          console.log('➕ Adding "Prato do Dia" category...');
+          console.log('âž• Adding "Prato do Dia" category...');
           const newCategory: Category = {
             id: generateId(),
             name: 'Prato do Dia'
@@ -1088,7 +1261,7 @@ function App() {
         } catch (e) {
           console.error('Error calculating size:', e);
         }
-        alert('Armazenamento cheio! Algumas imagens podem não ter sido salvas. Tente remover imagens antigas ou usar imagens menores.');
+        alert('Armazenamento cheio! Algumas imagens podem nÃ£o ter sido salvas. Tente remover imagens antigas ou usar imagens menores.');
       }
     }
   }, [items, isInitialized]);
@@ -1137,7 +1310,7 @@ function App() {
         } catch (e) {
           console.error('Error calculating size:', e);
         }
-        alert('Armazenamento cheio! Alguns arquivos de mídia podem não ter sido salvos. Tente remover arquivos antigos ou usar arquivos menores.');
+        alert('Armazenamento cheio! Alguns arquivos de mÃ­dia podem nÃ£o ter sido salvos. Tente remover arquivos antigos ou usar arquivos menores.');
       } else {
         // Log other errors but don't show alert
         console.error('Non-quota error saving settings:', error);
@@ -1156,33 +1329,98 @@ function App() {
 
   // Admin tabs
   const [adminTab, setAdminTab] = useState<'items' | 'categories' | 'orders' | 'settings'>('orders');
+  const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | Order['status']>('all');
+  const [orderPaymentFilter, setOrderPaymentFilter] = useState<'all' | 'awaiting_pix' | 'approved' | 'money_change' | 'notes'>('all');
+  const showMenuFirstMobile = isNativeApp && !isDesktop;
 
   // Checkout form
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryReference, setDeliveryReference] = useState('');
+  const [orderNotes, setOrderNotes] = useState('');
+  const [changeForInput, setChangeForInput] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Dinheiro');
+
+  const saveMenuAdminChanges = async () => {
+    try {
+      localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(categories));
+      localStorage.setItem(tenantStorageKeys.items, JSON.stringify(items));
+      localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(settings));
+
+      if (isNativeApp) {
+        alert('Cardapio salvo no app com sucesso.');
+        return;
+      }
+
+      const success = await syncToCloud();
+
+      if (success) {
+        alert('Cardapio sincronizado com sucesso.');
+      } else {
+        alert('As alteracoes ficaram salvas no aparelho, mas houve falha ao sincronizar com a nuvem.');
+      }
+    } catch (error) {
+      console.error('Error saving mobile menu admin changes:', error);
+      alert('Nao foi possivel salvar agora. Tente novamente.');
+    }
+  };
 
   const playOrderAlarm = () => {
     try {
+      orderAlarmTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      orderAlarmTimeoutsRef.current = [];
+
       const audioContext = new window.AudioContext();
-      const sequence = [988, 740, 988, 740, 988, 740];
-      sequence.forEach((frequency, index) => {
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        oscillator.type = 'square';
-        oscillator.frequency.value = frequency;
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        const start = audioContext.currentTime + index * 0.22;
-        const end = start + 0.18;
-        gainNode.gain.setValueAtTime(0.0001, start);
-        gainNode.gain.exponentialRampToValueAtTime(0.34, start + 0.02);
-        gainNode.gain.exponentialRampToValueAtTime(0.0001, end);
-        oscillator.start(start);
-        oscillator.stop(end);
-      });
+      const sequence = [1244, 988, 1244, 988, 1480, 1244, 988, 740];
+      const burstCount = 3;
+      const burstSpacingMs = 1450;
+
+      const playBurst = (burstIndex: number) => {
+        const burstOffset = burstIndex * 1.45;
+        sequence.forEach((frequency, index) => {
+          const oscillator = audioContext.createOscillator();
+          const gainNode = audioContext.createGain();
+          oscillator.type = 'square';
+          oscillator.frequency.value = frequency;
+          oscillator.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+          const start = audioContext.currentTime + burstOffset + index * 0.16;
+          const end = start + 0.13;
+          gainNode.gain.setValueAtTime(0.0001, start);
+          gainNode.gain.exponentialRampToValueAtTime(0.55, start + 0.015);
+          gainNode.gain.exponentialRampToValueAtTime(0.0001, end);
+          oscillator.start(start);
+          oscillator.stop(end);
+        });
+      };
+
+      for (let burstIndex = 0; burstIndex < burstCount; burstIndex += 1) {
+        if (burstIndex === 0) {
+          playBurst(burstIndex);
+          continue;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+          playBurst(burstIndex);
+        }, burstIndex * burstSpacingMs);
+        orderAlarmTimeoutsRef.current.push(timeoutId);
+      }
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance('Novo pedido');
+        utterance.lang = 'pt-BR';
+        utterance.volume = 1;
+        utterance.rate = 0.95;
+        utterance.pitch = 1;
+
+        const speechTimeoutId = window.setTimeout(() => {
+          window.speechSynthesis.speak(utterance);
+        }, 180);
+        orderAlarmTimeoutsRef.current.push(speechTimeoutId);
+      }
     } catch (error) {
       console.error('Nao foi possivel tocar o alarme de pedido:', error);
     }
@@ -1193,7 +1431,7 @@ function App() {
     notificationType: 'new_order' | 'payment_confirmed' = 'new_order',
   ) => {
     try {
-      const response = await fetch('/api/notify-order', {
+      const response = await fetch(getNotifyOrderApiUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1233,13 +1471,19 @@ function App() {
     const itemsList = order.items
       .map((entry) => `*${entry.quantity}x ${entry.item.name}* - R$ ${(entry.item.price * entry.quantity).toFixed(2)}`)
       .join('\n');
+    const extraDetails = [
+      order.reference ? `*Referencia:* ${order.reference}` : '',
+      order.notes ? `*Observacoes:* ${order.notes}` : '',
+      order.changeFor ? `*Troco para:* R$ ${order.changeFor.toFixed(2)}` : '',
+    ].filter(Boolean).join('\n');
 
     return `*NOVO PEDIDO #${order.id}*\n\n` +
       `*Cliente:* ${order.customerName}\n` +
       `${order.customerEmail ? `*Email:* ${order.customerEmail}\n` : ''}` +
       `*Telefone:* ${order.customerPhone}\n` +
-      `*Endereço:* ${order.address}\n` +
-      `*Pagamento:* ${paymentLabel || order.paymentMethod}\n\n` +
+      `*Endereco:* ${order.address}\n` +
+      `*Pagamento:* ${paymentLabel || order.paymentMethod}\n` +
+      `${extraDetails ? `${extraDetails}\n` : ''}\n` +
       `*Itens:*\n${itemsList}\n\n` +
       `*Subtotal:* R$ ${(order.total - settings.deliveryFee).toFixed(2)}\n` +
       `*Taxa de Entrega:* R$ ${settings.deliveryFee.toFixed(2)}\n` +
@@ -1250,7 +1494,55 @@ function App() {
   const buildPaymentConfirmedWhatsappMessage = (order: Order, paymentLabel: string) => {
     return buildOrderWhatsappMessage(order, paymentLabel) +
       `\n\n*Status do pagamento:* Confirmado` +
-      `\n*Produção:* Liberada pelo cliente`;
+      `\n*ProduÃ§Ã£o:* Liberada pelo cliente`;
+  };
+
+  const parseCurrencyInput = (value: string) => {
+    const normalized = value.replace(',', '.').trim();
+    if (!normalized) return undefined;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  };
+
+  const printOrderTicket = (order: Order) => {
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.style.position = 'fixed';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      document.body.appendChild(iframe);
+
+      const cleanup = () => {
+        window.setTimeout(() => {
+          iframe.remove();
+        }, 1200);
+      };
+
+      iframe.onload = () => {
+        window.setTimeout(() => {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+          cleanup();
+        }, 250);
+      };
+
+      const iframeDocument = iframe.contentDocument;
+      if (!iframeDocument) {
+        iframe.remove();
+        throw new Error('Nao foi possivel preparar a impressao do pedido.');
+      }
+
+      iframeDocument.open();
+      iframeDocument.write(buildPrintableOrderHtml(order, settings, tenantDisplayName));
+      iframeDocument.close();
+    } catch (error) {
+      console.error('Erro ao imprimir pedido:', error);
+      alert('Nao foi possivel abrir a impressao automatica deste pedido.');
+    }
   };
 
   const openRestaurantWhatsappFallback = (message: string) => {
@@ -1260,24 +1552,32 @@ function App() {
   const getPixKeyLabel = () => settings.bankInfo?.pixKey?.trim() || '';
 
   const isCardPaymentMethod = (method: string) =>
-    method === 'Cartão de Crédito' || method === 'Cartão de Débito';
+    method === 'CartÃ£o de CrÃ©dito' || method === 'CartÃ£o de DÃ©bito';
 
   const isExperimentalPaymentMethod = (method: string) =>
     currentExperimentalPayments.includes(method);
 
   const validateCheckoutFields = () => {
     if (!customerName || !customerPhone || !deliveryAddress) {
-      alert('Por favor, preencha todos os campos obrigatórios.');
+      alert('Por favor, preencha todos os campos obrigatorios.');
       return false;
     }
 
+    if (paymentMethod === 'Dinheiro' && changeForInput.trim()) {
+      const parsedChangeFor = parseCurrencyInput(changeForInput);
+      if (!parsedChangeFor) {
+        alert('Informe um valor valido para troco.');
+        return false;
+      }
+    }
+
     if (isCardPaymentMethod(paymentMethod) && !customerEmail.trim()) {
-      alert('Informe um e-mail para continuar com o pagamento no cartão.');
+      alert('Informe um e-mail para continuar com o pagamento no cartÃ£o.');
       return false;
     }
 
     if (isExperimentalPaymentMethod(paymentMethod) && !isLabTenant) {
-      alert('Este meio de pagamento está liberado apenas no ambiente de homologação.');
+      alert('Este meio de pagamento estÃ¡ liberado apenas no ambiente de homologaÃ§Ã£o.');
       return false;
     }
 
@@ -1292,6 +1592,9 @@ function App() {
       customerEmail: customerEmail.trim() || undefined,
       customerPhone,
       address: deliveryAddress,
+      reference: deliveryReference.trim() || undefined,
+      notes: orderNotes.trim() || undefined,
+      changeFor: parseCurrencyInput(changeForInput),
       items: [...cart],
       total: cartTotal + settings.deliveryFee,
       status: overrides?.status || 'pending',
@@ -1311,6 +1614,9 @@ function App() {
     setCustomerEmail('');
     setCustomerPhone('');
     setDeliveryAddress('');
+    setDeliveryReference('');
+    setOrderNotes('');
+    setChangeForInput('');
     setPaymentMethod((settings.paymentMethods || [])[0] || 'Dinheiro');
   };
 
@@ -1373,7 +1679,7 @@ function App() {
       `Cliente: ${updatedOrder.customerName}\n` +
       `Pagamento: ${paymentLabel}\n` +
       `Total: R$ ${updatedOrder.total.toFixed(2)}\n\n` +
-      `Pedido liberado para produção.`;
+      `Pedido liberado para produÃ§Ã£o.`;
 
     void paymentConfirmedMessage;
     const paymentConfirmedFallbackMessage = buildPaymentConfirmedWhatsappMessage(updatedOrder, paymentLabel);
@@ -1419,20 +1725,20 @@ function App() {
   };
 
   const addToCart = (item: MenuItem) => {
-    console.log('🛒 Adding to cart:', item.name, 'Available:', item.available);
+    console.log('ðŸ›’ Adding to cart:', item.name, 'Available:', item.available);
     if (!item.available) {
-      console.warn('⚠️ Item is not available:', item.name);
+      console.warn('âš ï¸ Item is not available:', item.name);
       return;
     }
     setCart(prev => {
       const existing = prev.find(i => i.item.id === item.id);
       if (existing) {
         const updated = prev.map(i => i.item.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
-        console.log('✅ Item quantity increased. Cart:', updated);
+        console.log('âœ… Item quantity increased. Cart:', updated);
         return updated;
       }
       const updated = [...prev, { item, quantity: 1 }];
-      console.log('✅ Item added to cart. Cart:', updated);
+      console.log('âœ… Item added to cart. Cart:', updated);
       return updated;
     });
     // Open cart after adding
@@ -1454,36 +1760,40 @@ function App() {
   };
 
   const cartTotal = cart.reduce((acc, curr) => acc + (curr.item.price * curr.quantity), 0);
+  const filteredAdminOrders = orders.filter((order) => {
+    const statusMatches = orderStatusFilter === 'all' || order.status === orderStatusFilter;
+    const paymentMatches =
+      orderPaymentFilter === 'all' ||
+      (orderPaymentFilter === 'awaiting_pix' && order.paymentStatus === 'awaiting_pix') ||
+      (orderPaymentFilter === 'approved' && order.paymentStatus === 'approved') ||
+      (orderPaymentFilter === 'money_change' && typeof order.changeFor === 'number') ||
+      (orderPaymentFilter === 'notes' && Boolean(order.notes));
+
+    return statusMatches && paymentMatches;
+  });
 
   const placeOrder = () => {
     if (!customerName || !customerPhone || !deliveryAddress) {
-      alert('Por favor, preencha todos os campos obrigatórios.');
+      alert('Por favor, preencha todos os campos obrigatorios.');
       return;
     }
 
-    const orderId = generateId();
-    const newOrder: Order = {
-      id: orderId,
-      customerName,
-      customerPhone,
-      address: deliveryAddress,
-      items: [...cart],
-      total: cartTotal + settings.deliveryFee,
+    const newOrder = buildOrder({
       status: 'pending',
-      createdAt: new Date().toISOString(),
-      paymentMethod,
-    };
+      paymentStatus: 'pending',
+    });
 
     // Add to orders list
     setOrders(prev => [newOrder, ...prev]);
     void notifyOrderByWhatsapp(newOrder);
 
     // Prepare WhatsApp message
+    const orderId = newOrder.id;
     const itemsList = cart.map(i => `*${i.quantity}x ${i.item.name}* - R$ ${(i.item.price * i.quantity).toFixed(2)}`).join('\n');
     const message = `*NOVO PEDIDO #${orderId}*\n\n` +
       `*Cliente:* ${customerName}\n` +
       `*Telefone:* ${customerPhone}\n` +
-      `*Endereço:* ${deliveryAddress}\n` +
+      `*Endereco:* ${deliveryAddress}\n` +
       `*Pagamento:* ${paymentMethod}\n\n` +
       `*Itens:*\n${itemsList}\n\n` +
       `*Subtotal:* R$ ${cartTotal.toFixed(2)}\n` +
@@ -1504,8 +1814,13 @@ function App() {
     
     // Reset form
     setCustomerName('');
+    setCustomerEmail('');
     setCustomerPhone('');
     setDeliveryAddress('');
+    setDeliveryReference('');
+    setOrderNotes('');
+    setChangeForInput('');
+    setPaymentMethod((settings.paymentMethods || [])[0] || 'Dinheiro');
 
     // Open WhatsApp in new tab
     window.open(whatsappUrl, '_blank');
@@ -1528,7 +1843,7 @@ function App() {
     setPixCopied(false);
     setPixOrder(newOrder);
     await persistOrder(newOrder, 'new_order', {
-      fallbackMessage: buildOrderWhatsappMessage(newOrder, 'PIX - aguardando confirmação'),
+      fallbackMessage: buildOrderWhatsappMessage(newOrder, 'PIX - aguardando confirmaÃ§Ã£o'),
       openWhatsappFallback: false,
       failureAlertMessage: 'Seu pedido foi enviado. Agora confirme seu pagamento compartilhando o comprovante para o numero: 42 991417956',
     });
@@ -1540,7 +1855,7 @@ function App() {
       setPixCopied(true);
     } catch (error) {
       console.error('Erro ao copiar chave PIX:', error);
-      alert('Não foi possível copiar automaticamente. Copie a chave manualmente.');
+      alert('NÃ£o foi possÃ­vel copiar automaticamente. Copie a chave manualmente.');
     }
   };
 
@@ -1548,7 +1863,7 @@ function App() {
     if (!pixOrder) return;
     await finalizeSuccessfulOrder(pixOrder, 'PIX aprovado', {
       openWhatsappFallback: true,
-      failureAlertMessage: 'Seu pagamento foi marcado como confirmado, mas não foi possível avisar o restaurante automaticamente. Entre em contato com o restaurante para garantir o andamento do pedido.',
+      failureAlertMessage: 'Seu pagamento foi marcado como confirmado, mas nÃ£o foi possÃ­vel avisar o restaurante automaticamente. Entre em contato com o restaurante para garantir o andamento do pedido.',
     });
   };
 
@@ -1557,7 +1872,7 @@ function App() {
 
     const publicKey = settings.paymentTokens?.mercadoPagoPublicKey?.trim();
     if (!publicKey) {
-      alert('Cadastre a chave pública do Mercado Pago no painel administrativo para receber pagamentos no cartão.');
+      alert('Cadastre a chave pÃºblica do Mercado Pago no painel administrativo para receber pagamentos no cartÃ£o.');
       return;
     }
 
@@ -1588,7 +1903,7 @@ function App() {
           paymentMethod,
         }));
       } catch (error) {
-        console.error('Erro ao preparar checkout Stripe no laboratório:', error);
+        console.error('Erro ao preparar checkout Stripe no laboratÃ³rio:', error);
       }
 
       const successUrl = `${window.location.origin}?tenant=${currentTenantId}&stripe_status=success&wallet=${encodeURIComponent(paymentMethod)}`;
@@ -1620,17 +1935,17 @@ function App() {
           if (!response.ok || !result.success || !result.checkoutUrl) {
             throw new Error(
               result?.error?.message ||
-              'Não foi possível iniciar o checkout Stripe para o laboratório.',
+              'NÃ£o foi possÃ­vel iniciar o checkout Stripe para o laboratÃ³rio.',
             );
           }
 
           window.location.href = result.checkoutUrl as string;
         } catch (error) {
-          console.error('Erro ao iniciar Stripe Checkout no laboratório:', error);
+          console.error('Erro ao iniciar Stripe Checkout no laboratÃ³rio:', error);
           alert(
             error instanceof Error
               ? error.message
-              : 'Não foi possível abrir o checkout experimental.',
+              : 'NÃ£o foi possÃ­vel abrir o checkout experimental.',
           );
         }
       })();
@@ -1672,7 +1987,7 @@ function App() {
         await ensureMercadoPagoSdk();
 
         if (!window.MercadoPago) {
-          throw new Error('SDK do Mercado Pago indisponível.');
+          throw new Error('SDK do Mercado Pago indisponÃ­vel.');
         }
 
         await cardBrickControllerRef.current?.unmount?.();
@@ -1698,7 +2013,7 @@ function App() {
               },
             },
             paymentMethods: {
-              maxInstallments: paymentMethod === 'Cartão de Débito' ? 1 : 12,
+              maxInstallments: paymentMethod === 'CartÃ£o de DÃ©bito' ? 1 : 12,
             },
           },
           callbacks: {
@@ -1711,7 +2026,7 @@ function App() {
               setIsCardSubmitting(true);
               setCardPaymentError(null);
 
-              const response = await fetch('/api/process-payment', {
+              const response = await fetch(getProcessPaymentApiUrl(), {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -1735,7 +2050,7 @@ function App() {
                 throw new Error(
                   result?.error?.message ||
                   result?.statusDetail ||
-                  'Pagamento não aprovado. Verifique os dados do cartão e tente novamente.',
+                  'Pagamento nÃ£o aprovado. Verifique os dados do cartÃ£o e tente novamente.',
                 );
               }
 
@@ -1762,7 +2077,7 @@ function App() {
             onError: (error: unknown) => {
               console.error('Erro no Brick do Mercado Pago:', error);
               if (!isCancelled) {
-                setCardPaymentError('Não foi possível abrir o formulário do cartão. Confira a chave pública e tente novamente.');
+                setCardPaymentError('NÃ£o foi possÃ­vel abrir o formulÃ¡rio do cartÃ£o. Confira a chave pÃºblica e tente novamente.');
               }
             },
           },
@@ -1774,12 +2089,12 @@ function App() {
           await controller?.unmount?.();
         }
       } catch (error) {
-        console.error('Erro ao iniciar pagamento com cartão:', error);
+        console.error('Erro ao iniciar pagamento com cartÃ£o:', error);
         if (!isCancelled) {
           setCardPaymentError(
             error instanceof Error
               ? error.message
-              : 'Não foi possível carregar o checkout do cartão.',
+              : 'NÃ£o foi possÃ­vel carregar o checkout do cartÃ£o.',
           );
         }
       } finally {
@@ -1865,10 +2180,10 @@ function App() {
 
       if (stripeStatus === 'cancelled') {
         sessionStorage.removeItem(tenantStorageKeys.pendingStripeOrder);
-        alert(`${wallet} foi cancelado no laboratório. Nenhum pedido foi enviado ao restaurante.`);
+        alert(`${wallet} foi cancelado no laboratÃ³rio. Nenhum pedido foi enviado ao restaurante.`);
       }
     } catch (error) {
-      console.error('Erro ao retomar checkout Stripe do laboratório:', error);
+      console.error('Erro ao retomar checkout Stripe do laboratÃ³rio:', error);
     } finally {
       clearStripeParams();
     }
@@ -1886,11 +2201,24 @@ function App() {
     latestOrderSignatureRef.current = currentSignature;
     setIncomingOrderAlert(latestOrder);
     playOrderAlarm();
-  }, [orders]);
+    if (isDesktop && isAdminAuthenticated && settings.printing?.autoPrintNewOrders) {
+      window.setTimeout(() => {
+        printOrderTicket(latestOrder);
+      }, 350);
+    }
+  }, [orders, isDesktop, isAdminAuthenticated, settings.printing?.autoPrintNewOrders]);
 
   const filteredItems = activeCategory === 'all' 
     ? items 
     : items.filter(i => i.category === activeCategory);
+  const featuredPratoDoDiaCategory = categories.find((category) =>
+    category.name.toLowerCase().includes('prato') && category.name.toLowerCase().includes('dia'),
+  );
+  const featuredPratoDoDia = featuredPratoDoDiaCategory
+    ? items.find(
+        (item) => item.available && item.category === featuredPratoDoDiaCategory.id,
+      )
+    : null;
 
   // Export all data WITH images for mobile sync (full data including images)
   const exportDataWithImages = () => {
@@ -1911,12 +2239,12 @@ function App() {
       const sizeInMB = sizeInKB / 1024;
       
       if (sizeInMB > 4) {
-        alert(`⚠️ ATENÇÃO: O arquivo é muito grande (${sizeInMB.toFixed(2)}MB).\n\nPara enviar via WhatsApp, use "Copiar para Celular (Otimizado)" que remove as imagens.\n\nEste export completo é para backup ou sincronização manual.`);
+        alert(`âš ï¸ ATENÃ‡ÃƒO: O arquivo Ã© muito grande (${sizeInMB.toFixed(2)}MB).\n\nPara enviar via WhatsApp, use "Copiar para Celular (Otimizado)" que remove as imagens.\n\nEste export completo Ã© para backup ou sincronizaÃ§Ã£o manual.`);
       }
       
       // Copy to clipboard
       navigator.clipboard.writeText(dataStr).then(() => {
-        alert(`✅ Dados completos (COM imagens) copiados para área de transferência!\n\nTamanho: ${sizeInKB.toFixed(2)}KB (${sizeInMB.toFixed(2)}MB)\n\nCole no celular usando "Colar JSON (Texto Único)" ou "Colar JSON em Partes".`);
+        alert(`âœ… Dados completos (COM imagens) copiados para Ã¡rea de transferÃªncia!\n\nTamanho: ${sizeInKB.toFixed(2)}KB (${sizeInMB.toFixed(2)}MB)\n\nCole no celular usando "Colar JSON (Texto Ãšnico)" ou "Colar JSON em Partes".`);
       }).catch(() => {
         // Fallback: show in prompt
         prompt('Copie este JSON completo (COM imagens):', dataStr);
@@ -1930,25 +2258,27 @@ function App() {
   // Restore backup from localStorage
   const restoreFromBackup = () => {
     try {
-      const backupStr = localStorage.getItem(tenantStorageKeys.backup) ?? localStorage.getItem(legacyStorageKeys.backup);
+      const backupStr = getStorageCandidates(tenantStorageKeys.backup, tenantStorageLegacyKeys.backup)
+        .map((key) => localStorage.getItem(key))
+        .find(Boolean);
       if (!backupStr) {
-        alert('❌ Nenhum backup encontrado no armazenamento local.\n\nO backup automático é criado antes de sincronizações com a nuvem.');
+        alert('âŒ Nenhum backup encontrado no armazenamento local.\n\nO backup automÃ¡tico Ã© criado antes de sincronizaÃ§Ãµes com a nuvem.');
         return;
       }
       
       const backup = JSON.parse(backupStr);
       
       if (!backup.categories || !backup.items || !backup.settings) {
-        alert('❌ Backup inválido ou corrompido.');
+        alert('âŒ Backup invÃ¡lido ou corrompido.');
         return;
       }
       
       const backupDate = backup.timestamp ? new Date(backup.timestamp).toLocaleString('pt-BR') : 'Data desconhecida';
-      const confirmMsg = `🔄 Restaurar backup?\n\n` +
+      const confirmMsg = `ðŸ”„ Restaurar backup?\n\n` +
         `Data do backup: ${backupDate}\n` +
         `Categorias: ${backup.categories.length}\n` +
         `Itens: ${backup.items.length}\n\n` +
-        `⚠️ ATENÇÃO: Isso substituirá TODOS os dados atuais!\n\n` +
+        `âš ï¸ ATENÃ‡ÃƒO: Isso substituirÃ¡ TODOS os dados atuais!\n\n` +
         `Deseja continuar?`;
       
       if (!confirm(confirmMsg)) {
@@ -1971,11 +2301,11 @@ function App() {
         localStorage.setItem(tenantStorageKeys.orders, JSON.stringify(backup.orders));
       }
       
-      alert('✅ Backup restaurado com sucesso!\n\nA página será recarregada em 1 segundo...');
+      alert('âœ… Backup restaurado com sucesso!\n\nA pÃ¡gina serÃ¡ recarregada em 1 segundo...');
       setTimeout(() => window.location.reload(), 1000);
     } catch (error) {
       console.error('Error restoring backup:', error);
-      alert('❌ Erro ao restaurar backup. Verifique o console para mais detalhes.');
+      alert('âŒ Erro ao restaurar backup. Verifique o console para mais detalhes.');
     }
   };
 
@@ -2032,7 +2362,8 @@ function App() {
         openingHours: settings.openingHours,
         deliveryFee: settings.deliveryFee,
         minOrder: settings.minOrder,
-        paymentMethods: settings.paymentMethods
+        paymentMethods: settings.paymentMethods,
+        storefrontText: settings.storefrontText,
         // All images and videos removed
       };
 
@@ -2065,28 +2396,28 @@ function App() {
         }
         
         // Create a formatted message with all chunks
-        let message = `📱 SINCRONIZAÇÃO DE DADOS\n\n`;
+        let message = `ðŸ“± SINCRONIZAÃ‡ÃƒO DE DADOS\n\n`;
         message += `Total: ${totalChunks} parte(s)\n`;
         message += `Tamanho: ${sizeInKB.toFixed(2)} KB\n\n`;
-        message += `⚠️ IMPORTANTE: Copie TODAS as partes abaixo e cole no celular usando o botão "Colar JSON em Partes"\n\n`;
-        message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        message += `âš ï¸ IMPORTANTE: Copie TODAS as partes abaixo e cole no celular usando o botÃ£o "Colar JSON em Partes"\n\n`;
+        message += `â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n`;
         
         chunks.forEach((chunk, index) => {
           message += `PARTE ${index + 1}/${totalChunks}:\n`;
           message += `${chunk}\n\n`;
-          message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+          message += `â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n`;
         });
         
         // Copy to clipboard
         navigator.clipboard.writeText(message).then(() => {
-          alert(`Dados divididos em ${totalChunks} partes!\n\nTamanho total: ${sizeInKB.toFixed(2)} KB\n\nTodas as partes foram copiadas. Envie via WhatsApp e depois use o botão "Colar JSON em Partes" no celular.\n\nNota: Todas as imagens foram removidas para reduzir o tamanho.`);
+          alert(`Dados divididos em ${totalChunks} partes!\n\nTamanho total: ${sizeInKB.toFixed(2)} KB\n\nTodas as partes foram copiadas. Envie via WhatsApp e depois use o botÃ£o "Colar JSON em Partes" no celular.\n\nNota: Todas as imagens foram removidas para reduzir o tamanho.`);
         }).catch(() => {
           prompt('Copie esta mensagem completa:', message);
         });
       } else {
         // Single chunk - small enough
         navigator.clipboard.writeText(dataStr).then(() => {
-          alert(`Dados otimizados copiados!\n\nTamanho: ${sizeInKB.toFixed(2)} KB\n\nCole no celular usando o botão "Colar JSON".\n\nNota: Todas as imagens foram removidas para reduzir o tamanho.`);
+          alert(`Dados otimizados copiados!\n\nTamanho: ${sizeInKB.toFixed(2)} KB\n\nCole no celular usando o botÃ£o "Colar JSON".\n\nNota: Todas as imagens foram removidas para reduzir o tamanho.`);
         }).catch(() => {
           const textarea = document.createElement('textarea');
           textarea.value = dataStr;
@@ -2096,7 +2427,7 @@ function App() {
           textarea.select();
           try {
             document.execCommand('copy');
-            alert('Dados copiados! Agora cole no celular usando o botão "Colar JSON".');
+            alert('Dados copiados! Agora cole no celular usando o botÃ£o "Colar JSON".');
           } catch {
             prompt('Copie este texto:', dataStr);
           }
@@ -2125,7 +2456,7 @@ function App() {
       }
       
       // Extract each PARTE X/Y: chunk
-      const parteRegex = /PARTE\s*(\d+)\/(\d+):\s*([\s\S]*?)(?=\n\n━━|PARTE\s*\d+\/|$)/gi;
+      const parteRegex = /PARTE\s*(\d+)\/(\d+):\s*([\s\S]*?)(?=\n\nâ”â”|PARTE\s*\d+\/|$)/gi;
       let match;
       
       while ((match = parteRegex.exec(text)) !== null) {
@@ -2146,7 +2477,7 @@ function App() {
     };
     
     // First attempt: try to get everything at once
-    const firstInput = prompt('Cole o máximo que conseguir do WhatsApp:\n\n(Pode ser o cabeçalho, uma parte, ou várias partes juntas)\n\nSe não conseguir copiar tudo, cole o que conseguir e depois continuaremos.');
+    const firstInput = prompt('Cole o mÃ¡ximo que conseguir do WhatsApp:\n\n(Pode ser o cabeÃ§alho, uma parte, ou vÃ¡rias partes juntas)\n\nSe nÃ£o conseguir copiar tudo, cole o que conseguir e depois continuaremos.');
     
     if (!firstInput) return;
     
@@ -2158,7 +2489,7 @@ function App() {
     
     // If we still don't know total, ask user
     if (!totalChunks) {
-      const userInput = prompt(`Quantas partes no total? (veja no início da mensagem do WhatsApp)\n\nJá coletadas: ${collectedChunks.size}`);
+      const userInput = prompt(`Quantas partes no total? (veja no inÃ­cio da mensagem do WhatsApp)\n\nJÃ¡ coletadas: ${collectedChunks.size}`);
       if (!userInput) return;
       totalChunks = parseInt(userInput) || collectedChunks.size;
     }
@@ -2178,10 +2509,10 @@ function App() {
         ? missingParts.join(', ')
         : `${missingParts.slice(0, 5).join(', ')}... (e mais ${missingParts.length - 5})`;
       
-      const nextInput = prompt(`Faltam ${missingParts.length} parte(s): ${missingList}\n\nCole a(s) parte(s) que faltam:\n\n(Pode colar uma ou várias partes de uma vez)`);
+      const nextInput = prompt(`Faltam ${missingParts.length} parte(s): ${missingList}\n\nCole a(s) parte(s) que faltam:\n\n(Pode colar uma ou vÃ¡rias partes de uma vez)`);
       
       if (!nextInput) {
-        const cancel = confirm(`Você cancelou. Deseja continuar com as ${collectedChunks.size} parte(s) já coletadas de ${totalChunks}?`);
+        const cancel = confirm(`VocÃª cancelou. Deseja continuar com as ${collectedChunks.size} parte(s) jÃ¡ coletadas de ${totalChunks}?`);
         if (!cancel) return;
         break;
       }
@@ -2204,7 +2535,7 @@ function App() {
     }
     
     if (collectedChunks.size === 0) {
-      alert('Nenhuma parte foi coletada. Importação cancelada.');
+      alert('Nenhuma parte foi coletada. ImportaÃ§Ã£o cancelada.');
       return;
     }
     
@@ -2220,7 +2551,7 @@ function App() {
     const combinedData = orderedChunks.join('');
     
     // Show info before importing
-    const info = `Coletadas ${collectedChunks.size} parte(s) de ${totalChunks} total.\n\nTamanho: ${(combinedData.length / 1024).toFixed(2)} KB\n\nContinuar com a importação?`;
+    const info = `Coletadas ${collectedChunks.size} parte(s) de ${totalChunks} total.\n\nTamanho: ${(combinedData.length / 1024).toFixed(2)} KB\n\nContinuar com a importaÃ§Ã£o?`;
     if (!confirm(info)) return;
     
     try {
@@ -2242,7 +2573,7 @@ function App() {
     optimized?: boolean;
   }) => {
     if (!importedData.categories || !importedData.items || !importedData.settings) {
-      alert('Arquivo inválido. Certifique-se de que é um backup válido do sistema.');
+      alert('Arquivo invÃ¡lido. Certifique-se de que Ã© um backup vÃ¡lido do sistema.');
       return false;
     }
     
@@ -2311,13 +2642,13 @@ function App() {
       }
       
       console.log('Data saved to localStorage successfully');
-      alert('✅ Dados importados com sucesso!\n\nA página será recarregada em 1 segundo...');
+      alert('âœ… Dados importados com sucesso!\n\nA pÃ¡gina serÃ¡ recarregada em 1 segundo...');
       setTimeout(() => window.location.reload(), 1000);
       return true;
     } catch (error) {
       console.error('Error saving imported data:', error);
       if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-        alert('Armazenamento cheio! Alguns dados podem não ter sido salvos. Tente limpar o armazenamento primeiro.');
+        alert('Armazenamento cheio! Alguns dados podem nÃ£o ter sido salvos. Tente limpar o armazenamento primeiro.');
       } else {
         alert('Erro ao salvar dados importados. Tente novamente.');
       }
@@ -2341,15 +2672,15 @@ function App() {
           
           // Validate structure
           if (!importedData.categories || !Array.isArray(importedData.categories)) {
-            alert('Erro: O arquivo não contém categorias válidas.');
+            alert('Erro: O arquivo nÃ£o contÃ©m categorias vÃ¡lidas.');
             return;
           }
           if (!importedData.items || !Array.isArray(importedData.items)) {
-            alert('Erro: O arquivo não contém itens válidos.');
+            alert('Erro: O arquivo nÃ£o contÃ©m itens vÃ¡lidos.');
             return;
           }
           if (!importedData.settings || typeof importedData.settings !== 'object') {
-            alert('Erro: O arquivo não contém configurações válidas.');
+            alert('Erro: O arquivo nÃ£o contÃ©m configuraÃ§Ãµes vÃ¡lidas.');
             return;
           }
           
@@ -2358,21 +2689,21 @@ function App() {
           
           // Show summary before importing
           const summary = `Dados encontrados:\n\n` +
-            `• ${importedData.categories.length} categoria(s)\n` +
-            `• ${importedData.items.length} item(ns)\n` +
-            `• Configurações: ${importedData.settings.name || 'N/A'}\n` +
-            `${isOptimized ? '\n⚠️ JSON OTIMIZADO: Imagens/vídeos serão preservados (não substituídos).' : '\n📸 Backup completo: Todas as imagens serão substituídas.'}\n\n` +
-            `Continuar com a importação?`;
+            `â€¢ ${importedData.categories.length} categoria(s)\n` +
+            `â€¢ ${importedData.items.length} item(ns)\n` +
+            `â€¢ ConfiguraÃ§Ãµes: ${importedData.settings.name || 'N/A'}\n` +
+            `${isOptimized ? '\nâš ï¸ JSON OTIMIZADO: Imagens/vÃ­deos serÃ£o preservados (nÃ£o substituÃ­dos).' : '\nðŸ“¸ Backup completo: Todas as imagens serÃ£o substituÃ­das.'}\n\n` +
+            `Continuar com a importaÃ§Ã£o?`;
           
           if (confirm(summary)) {
             processImportedData(importedData);
           } else {
-            alert('Importação cancelada.');
+            alert('ImportaÃ§Ã£o cancelada.');
           }
         } catch (error) {
           console.error('Error importing data:', error);
           const errorMsg = error instanceof Error ? error.message : String(error);
-          alert(`Erro ao importar dados:\n\n${errorMsg}\n\nCertifique-se de que o arquivo é um JSON válido.`);
+          alert(`Erro ao importar dados:\n\n${errorMsg}\n\nCertifique-se de que o arquivo Ã© um JSON vÃ¡lido.`);
         }
       };
       reader.readAsText(file);
@@ -2397,15 +2728,15 @@ function App() {
       
       // Validate structure
       if (!importedData.categories || !Array.isArray(importedData.categories)) {
-        alert('Erro: O JSON não contém categorias válidas.');
+        alert('Erro: O JSON nÃ£o contÃ©m categorias vÃ¡lidas.');
         return;
       }
       if (!importedData.items || !Array.isArray(importedData.items)) {
-        alert('Erro: O JSON não contém itens válidos.');
+        alert('Erro: O JSON nÃ£o contÃ©m itens vÃ¡lidos.');
         return;
       }
       if (!importedData.settings || typeof importedData.settings !== 'object') {
-        alert('Erro: O JSON não contém configurações válidas.');
+        alert('Erro: O JSON nÃ£o contÃ©m configuraÃ§Ãµes vÃ¡lidas.');
         return;
       }
       
@@ -2414,40 +2745,40 @@ function App() {
       
       // Show summary before importing
       const summary = `Dados encontrados:\n\n` +
-        `• ${importedData.categories.length} categoria(s)\n` +
-        `• ${importedData.items.length} item(ns)\n` +
-        `• Configurações: ${importedData.settings.name || 'N/A'}\n` +
-        `${isOptimized ? '\n⚠️ JSON OTIMIZADO: Imagens/vídeos serão preservados (não substituídos).' : '\n📸 Backup completo: Todas as imagens serão substituídas.'}\n\n` +
-        `Continuar com a importação?`;
+        `â€¢ ${importedData.categories.length} categoria(s)\n` +
+        `â€¢ ${importedData.items.length} item(ns)\n` +
+        `â€¢ ConfiguraÃ§Ãµes: ${importedData.settings.name || 'N/A'}\n` +
+        `${isOptimized ? '\nâš ï¸ JSON OTIMIZADO: Imagens/vÃ­deos serÃ£o preservados (nÃ£o substituÃ­dos).' : '\nðŸ“¸ Backup completo: Todas as imagens serÃ£o substituÃ­das.'}\n\n` +
+        `Continuar com a importaÃ§Ã£o?`;
       
       if (confirm(summary)) {
         processImportedData(importedData);
         const successMsg = isOptimized
-          ? '✅ Dados importados com sucesso!\n\nImagens e vídeos foram preservados.\n\nA página será recarregada em 1 segundo...'
-          : '✅ Dados importados com sucesso!\n\nA página será recarregada em 1 segundo...';
+          ? 'âœ… Dados importados com sucesso!\n\nImagens e vÃ­deos foram preservados.\n\nA pÃ¡gina serÃ¡ recarregada em 1 segundo...'
+          : 'âœ… Dados importados com sucesso!\n\nA pÃ¡gina serÃ¡ recarregada em 1 segundo...';
         alert(successMsg);
       } else {
-        alert('Importação cancelada.');
+        alert('ImportaÃ§Ã£o cancelada.');
       }
     } catch (error) {
       console.error('Error parsing pasted JSON:', error);
       const errorMsg = error instanceof Error ? error.message : String(error);
-      alert(`Erro ao processar JSON:\n\n${errorMsg}\n\nCertifique-se de que:\n• O texto está completo\n• Não há espaços extras no início/fim\n• O JSON está válido`);
+      alert(`Erro ao processar JSON:\n\n${errorMsg}\n\nCertifique-se de que:\nâ€¢ O texto estÃ¡ completo\nâ€¢ NÃ£o hÃ¡ espaÃ§os extras no inÃ­cio/fim\nâ€¢ O JSON estÃ¡ vÃ¡lido`);
     }
   };
 
   return (
     <div className="min-h-screen font-sans bg-orange-50 text-stone-900 selection:bg-orange-200 selection:text-orange-900">
       {/* Update Banner */}
-      {showUpdateBanner && (
+      {!isNativeApp && showUpdateBanner && (
         <div className="fixed top-0 left-0 right-0 z-[9999] bg-orange-600 text-white px-4 py-3 sm:py-4 flex items-center justify-between gap-4 shadow-lg">
           <div className="flex items-center gap-3 flex-1">
             <div className="flex-shrink-0">
               <RefreshCw size={20} className="sm:w-6 sm:h-6 animate-spin" />
             </div>
             <div className="flex-1">
-              <p className="font-black text-xs sm:text-sm uppercase tracking-widest">Nova versão disponível!</p>
-              <p className="text-[10px] sm:text-xs opacity-90 mt-0.5">Toque para atualizar e obter as últimas melhorias</p>
+              <p className="font-black text-xs sm:text-sm uppercase tracking-widest">Nova versÃ£o disponÃ­vel!</p>
+              <p className="text-[10px] sm:text-xs opacity-90 mt-0.5">Toque para atualizar e obter as Ãºltimas melhorias</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -2474,7 +2805,7 @@ function App() {
       )}
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md shadow-sm border-b border-orange-100">
-        <div className="container mx-auto px-3 sm:px-6 md:px-8 h-16 sm:h-24 flex items-center justify-between gap-3 py-2 sm:py-3">
+        <div className="container mx-auto px-3 sm:px-6 md:px-8 h-20 sm:h-24 flex items-center justify-between gap-3 py-3 sm:py-3">
           <div
             className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1 overflow-hidden"
             onClick={handleHiddenAdminTrigger}
@@ -2482,39 +2813,37 @@ function App() {
           >
             {settings.logo ? (
               (() => {
-                // Logo size matches title text size: text-[11px] sm:text-lg md:text-2xl
-                // Mobile: 11px, sm: 18px (text-lg), md: 24px (text-2xl)
-                const logoSizeClasses = 'h-[11px] sm:h-[18px] md:h-[24px] w-auto';
+                const logoSizeClasses = 'h-12 w-12 sm:h-16 sm:w-16 md:h-20 md:w-20';
                 const customStyle = settings.logoSize === 'custom' && settings.logoSizePx
-                  ? { height: `${settings.logoSizePx}px`, width: 'auto' }
+                  ? { height: `${settings.logoSizePx}px`, width: `${settings.logoSizePx}px` }
                   : {};
                 return (
-                  <img 
-                    src={settings.logo} 
-                    alt={settings.name || 'Logo'} 
-                    className={`${logoSizeClasses} object-contain rounded-lg sm:rounded-xl flex-shrink-0`}
-                    style={customStyle}
-                  />
+                    <img 
+                      src={settings.logo} 
+                      alt={settings.name || 'Logo'} 
+                      className={`${logoSizeClasses} object-cover object-top rounded-2xl sm:rounded-3xl flex-shrink-0 shadow-md border border-orange-100 bg-white`}
+                      style={customStyle}
+                    />
                 );
               })()
             ) : (
-              <div className="h-[11px] sm:h-[18px] md:h-[24px] aspect-square bg-orange-700 rounded-xl sm:rounded-2xl flex items-center justify-center text-white font-black text-[11px] sm:text-lg md:text-2xl shadow-lg shadow-orange-700/20 rotate-3 flex-shrink-0">
-                {(settings.name || 'Sabor Caseiro').split(' ').filter(Boolean).map(n => n[0] || '').join('').slice(0, 2).toUpperCase()}
+              <div className="h-12 w-12 sm:h-16 sm:w-16 md:h-20 md:w-20 bg-orange-700 rounded-2xl sm:rounded-3xl flex items-center justify-center text-white font-black text-sm sm:text-xl md:text-2xl shadow-lg shadow-orange-700/20 flex-shrink-0">
+                {(settings.name || 'Granatto').split(' ').filter(Boolean).map(n => n[0] || '').join('').slice(0, 2).toUpperCase()}
               </div>
             )}
-            <div className="flex flex-col justify-center min-w-0 flex-1 overflow-hidden pr-1 sm:pr-2">
-              <h1 className="text-[11px] sm:text-lg md:text-2xl font-black text-orange-900 leading-tight sm:leading-none tracking-tight mb-0.5 sm:mb-1">{settings.name || 'Sabor Caseiro'}</h1>
-              <p className="text-[8px] sm:text-[11px] text-green-700 font-bold tracking-[0.1em] sm:tracking-[0.2em] uppercase">Comida Caseira</p>
+              <div className="flex flex-col justify-center min-w-0 flex-1 overflow-hidden pr-1 sm:pr-2">
+                <h1 className="text-xl sm:text-xl md:text-3xl font-black text-orange-900 leading-tight tracking-tight mb-0.5 sm:mb-1">{settings.name || 'Granatto'}</h1>
+                <p className="text-[12px] sm:text-xs md:text-sm text-green-700 font-bold tracking-[0.14em] sm:tracking-[0.22em] uppercase">Comida Caseira</p>
               {isLabTenant && (
                 <p className="mt-1 text-[8px] sm:text-[10px] text-amber-700 font-black tracking-[0.18em] uppercase">
-                  Ambiente de Homologação
+                  Ambiente de Homologacao
                 </p>
               )}
             </div>
           </div>
 
           <div className="hidden md:flex items-center gap-8">
-            <a href="#menu" className="text-stone-600 hover:text-orange-700 font-bold text-sm uppercase tracking-widest transition-colors">Cardápio</a>
+            <a href="#menu" className="text-stone-600 hover:text-orange-700 font-bold text-sm uppercase tracking-widest transition-colors">Cardapio</a>
             <a href="#about" className="text-stone-600 hover:text-orange-700 font-bold text-sm uppercase tracking-widest transition-colors">Sobre</a>
             <a href="#contact" className="text-stone-600 hover:text-orange-700 font-bold text-sm uppercase tracking-widest transition-colors">Contato</a>
           </div>
@@ -2537,108 +2866,145 @@ function App() {
         </div>
       </header>
 
-      {/* Hero */}
-      <section className="relative min-h-[540px] sm:min-h-[620px] md:min-h-[720px] flex items-center justify-center overflow-hidden bg-[#120c09]">
-        <div className="hero-wood-bg absolute inset-0" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.22),transparent_38%),radial-gradient(circle_at_bottom,rgba(120,53,15,0.55),transparent_42%)]" />
-        <div className="absolute inset-0 backdrop-blur-[2px]" />
-        {settings.heroVideo && !heroForegroundImage && (
-          <video 
-            key={`hero-video-${settings.heroVideo.substring(0, 50)}`}
-            autoPlay 
-            muted 
-            loop 
-            playsInline 
-            preload="auto"
-            className="absolute inset-0 h-full w-full object-cover opacity-25 blur-sm scale-105"
-            src={settings.heroVideo}
-            onError={(e) => {
-              console.error('Error loading hero video:', e);
-              const videoElement = e.target as HTMLVideoElement;
-              videoElement.style.display = 'none';
-            }}
-            onLoadedData={() => {
-              console.log('Hero video loaded successfully');
-            }}
-          />
-        )}
-        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(10,6,4,0.18),rgba(10,6,4,0.7))]" />
-        <div className="relative z-20 flex w-full max-w-6xl flex-col items-center gap-10 px-4 py-16 text-center text-white sm:px-6 md:gap-14 md:px-8">
-          <div className="relative flex w-full items-center justify-center">
-            <div className="absolute h-40 w-40 rounded-full bg-orange-500/20 blur-3xl sm:h-56 sm:w-56 md:h-72 md:w-72" />
-            <div className="absolute h-[68%] w-[72%] max-w-3xl rounded-[3rem] border border-white/8 bg-black/18 backdrop-blur-md shadow-[0_30px_120px_rgba(0,0,0,0.45)]" />
-            {heroForegroundImage ? (
-              <img
-                key={`hero-foreground-${heroForegroundImage.substring(0, 50)}`}
-                src={heroForegroundImage}
-                className="relative z-10 max-h-[180px] w-auto max-w-[min(94vw,1200px)] object-contain mix-blend-multiply drop-shadow-[0_24px_40px_rgba(0,0,0,0.75)] sm:max-h-[240px] md:max-h-[320px] lg:max-h-[360px]"
-                alt={settings.name || 'Logo do restaurante'}
-                loading="eager"
-                onError={(e) => {
-                  console.error('Error loading hero foreground image:', e);
-                  const target = e.target as HTMLImageElement;
-                  target.style.display = 'none';
-                }}
-                onLoad={() => {
-                  console.log('Hero foreground image loaded successfully');
-                }}
-              />
-            ) : (
-              <div className="relative z-10 flex h-44 w-44 items-center justify-center rounded-[2.5rem] border border-orange-200/20 bg-white/10 px-8 text-center shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-lg sm:h-56 sm:w-56 md:h-72 md:w-72">
-                <span className="text-3xl font-black tracking-tight text-orange-100 sm:text-4xl md:text-5xl">
-                  {(settings.name || 'Sabor Caseiro').split(' ').filter(Boolean).slice(0, 2).join(' ')}
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="w-full max-w-[min(90vw,900px)]">
-          <motion.span 
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-4 inline-block rounded-full border border-orange-200/20 bg-orange-500/80 px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-white shadow-xl shadow-orange-950/30 backdrop-blur-sm sm:mb-6 sm:px-4 sm:py-1.5 sm:text-xs sm:tracking-[0.3em]"
-          >
-            Bem-vindo!
-          </motion.span>
-          <motion.h2 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="mb-4 px-2 text-3xl font-black leading-[0.92] tracking-tighter text-white sm:mb-6 sm:text-4xl md:mb-8 md:text-5xl lg:text-6xl"
-          >
-            O sabor <span className="text-orange-400 underline decoration-orange-400/30 underline-offset-4 sm:underline-offset-8">especial</span> que valoriza a sua marca
-          </motion.h2>
-          <motion.p 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="mx-auto mb-8 max-w-[42rem] px-2 text-sm font-medium leading-relaxed text-stone-200 sm:mb-10 sm:text-lg md:mb-12 md:text-xl lg:text-[1.35rem]"
-          >
-            Pedidos pelo site em Adicionar ou pelo WhatsApp clicando no botão abaixo.
-          </motion.p>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.3 }}
-            className="flex w-full flex-col items-center justify-center gap-3 px-4 sm:flex-row sm:gap-4"
-          >
-            <a 
-              href="#menu" 
-              className="w-full rounded-2xl bg-orange-700 px-8 py-3 text-sm font-black uppercase tracking-widest text-white shadow-2xl shadow-orange-950/40 transition-all hover:-translate-y-1 hover:bg-orange-800 active:scale-95 sm:w-auto sm:rounded-3xl sm:px-12 sm:py-5 sm:text-lg"
+      {showMenuFirstMobile && (
+        <div className="sticky top-16 z-40 bg-orange-50/95 backdrop-blur-xl border-b border-orange-100 py-3">
+          <div className="container mx-auto px-3 sm:px-4 flex items-center gap-2 overflow-x-auto no-scrollbar">
+            <button 
+              onClick={() => setActiveCategory('all')} 
+              onTouchStart={(e) => e.stopPropagation()}
+              className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest whitespace-nowrap transition-all active:scale-95 ${
+                activeCategory === 'all' 
+                  ? 'bg-orange-700 text-white shadow-xl shadow-orange-700/20 -translate-y-0.5' 
+                  : 'bg-white text-stone-400 hover:text-stone-800 hover:bg-orange-100'
+              }`}
+              style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
             >
-              Ver Cardápio
-            </a>
-            <a 
-              href="#contact" 
-              className="w-full rounded-2xl border border-white/20 bg-white/10 px-8 py-3 text-sm font-black uppercase tracking-widest text-white backdrop-blur-md transition-all hover:-translate-y-1 hover:bg-white/20 active:scale-95 sm:w-auto sm:rounded-3xl sm:px-12 sm:py-5 sm:text-lg"
-            >
-              Localização
-            </a>
-          </motion.div>
+              Todos
+            </button>
+            {[...categories].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).map(cat => (
+              <button 
+                key={cat.id} 
+                onClick={() => setActiveCategory(cat.id)} 
+                onTouchStart={(e) => e.stopPropagation()}
+                className={`px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest whitespace-nowrap transition-all active:scale-95 ${
+                  activeCategory === cat.id 
+                    ? 'bg-orange-700 text-white shadow-xl shadow-orange-700/20 -translate-y-0.5' 
+                    : 'bg-white text-stone-400 hover:text-stone-800 hover:bg-orange-100'
+                }`}
+                style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
+              >
+                {cat.name}
+              </button>
+            ))}
           </div>
         </div>
-      </section>
+      )}
+
+      {/* Hero */}
+      {showMenuFirstMobile ? null : (
+        <section className="relative min-h-[540px] sm:min-h-[620px] md:min-h-[720px] flex items-center justify-center overflow-hidden bg-[#120c09]">
+          <div className="hero-wood-bg absolute inset-0" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(251,146,60,0.22),transparent_38%),radial-gradient(circle_at_bottom,rgba(120,53,15,0.55),transparent_42%)]" />
+          <div className="absolute inset-0 backdrop-blur-[2px]" />
+          {settings.heroVideo && !heroForegroundImage && (
+            <video 
+              key={`hero-video-${settings.heroVideo.substring(0, 50)}`}
+              autoPlay 
+              muted 
+              loop 
+              playsInline 
+              preload="auto"
+              className="absolute inset-0 h-full w-full object-cover opacity-25 blur-sm scale-105"
+              src={settings.heroVideo}
+              onError={(e) => {
+                console.error('Error loading hero video:', e);
+                const videoElement = e.target as HTMLVideoElement;
+                videoElement.style.display = 'none';
+              }}
+              onLoadedData={() => {
+                console.log('Hero video loaded successfully');
+              }}
+            />
+          )}
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(10,6,4,0.18),rgba(10,6,4,0.7))]" />
+          <div className="relative z-20 flex w-full max-w-6xl flex-col items-center gap-10 px-4 py-16 text-center text-white sm:px-6 md:gap-14 md:px-8">
+            <div className="relative flex w-full items-center justify-center">
+              <div className="absolute h-40 w-40 rounded-full bg-orange-500/20 blur-3xl sm:h-56 sm:w-56 md:h-72 md:w-72" />
+              <div className="absolute h-[68%] w-[72%] max-w-3xl rounded-[3rem] border border-white/8 bg-black/18 backdrop-blur-md shadow-[0_30px_120px_rgba(0,0,0,0.45)]" />
+              {heroForegroundImage ? (
+                <img
+                  key={`hero-foreground-${heroForegroundImage.substring(0, 50)}`}
+                  src={heroForegroundImage}
+                  className="relative z-10 max-h-[180px] w-auto max-w-[min(94vw,1200px)] object-contain mix-blend-multiply drop-shadow-[0_24px_40px_rgba(0,0,0,0.75)] sm:max-h-[240px] md:max-h-[320px] lg:max-h-[360px]"
+                  alt={settings.name || 'Logo do restaurante'}
+                  loading="eager"
+                  onError={(e) => {
+                    console.error('Error loading hero foreground image:', e);
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                  }}
+                  onLoad={() => {
+                    console.log('Hero foreground image loaded successfully');
+                  }}
+                />
+              ) : (
+                <div className="relative z-10 flex h-44 w-44 items-center justify-center rounded-[2.5rem] border border-orange-200/20 bg-white/10 px-8 text-center shadow-[0_24px_60px_rgba(0,0,0,0.55)] backdrop-blur-lg sm:h-56 sm:w-56 md:h-72 md:w-72">
+                  <span className="text-3xl font-black tracking-tight text-orange-100 sm:text-4xl md:text-5xl">
+                    {(settings.name || 'Granatto').split(' ').filter(Boolean).slice(0, 2).join(' ')}
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="w-full max-w-[min(90vw,900px)]">
+            <motion.span 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-4 inline-block rounded-full border border-orange-200/20 bg-orange-500/80 px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-white shadow-xl shadow-orange-950/30 backdrop-blur-sm sm:mb-6 sm:px-4 sm:py-1.5 sm:text-xs sm:tracking-[0.3em]"
+            >
+              {storefrontText.heroBadge}
+            </motion.span>
+            <motion.h2 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="mb-4 px-2 text-3xl font-black leading-[0.92] tracking-tighter text-white sm:mb-6 sm:text-4xl md:mb-8 md:text-5xl lg:text-6xl"
+            >
+            {storefrontText.heroTitle}
+            </motion.h2>
+            <motion.p 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="mx-auto mb-8 max-w-[42rem] px-2 text-sm font-medium leading-relaxed text-stone-200 sm:mb-10 sm:text-lg md:mb-12 md:text-xl lg:text-[1.35rem]"
+            >
+            {storefrontText.heroSubtitle}
+            </motion.p>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.3 }}
+              className="flex w-full flex-col items-center justify-center gap-3 px-4 sm:flex-row sm:gap-4"
+            >
+              <a 
+                href="#menu" 
+                className="w-full rounded-2xl bg-orange-700 px-8 py-3 text-sm font-black uppercase tracking-widest text-white shadow-2xl shadow-orange-950/40 transition-all hover:-translate-y-1 hover:bg-orange-800 active:scale-95 sm:w-auto sm:rounded-3xl sm:px-12 sm:py-5 sm:text-lg"
+              >
+                {storefrontText.heroPrimaryButton}
+              </a>
+              <a 
+                href="#contact" 
+                className="w-full rounded-2xl border border-white/20 bg-white/10 px-8 py-3 text-sm font-black uppercase tracking-widest text-white backdrop-blur-md transition-all hover:-translate-y-1 hover:bg-white/20 active:scale-95 sm:w-auto sm:rounded-3xl sm:px-12 sm:py-5 sm:text-lg"
+              >
+                {storefrontText.heroSecondaryButton}
+              </a>
+            </motion.div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Categories Bar */}
+      {!showMenuFirstMobile && (
       <div className="sticky top-16 sm:top-24 z-40 bg-orange-50/90 backdrop-blur-xl border-b border-orange-100 py-3 sm:py-6">
         <div className="container mx-auto px-3 sm:px-4 flex items-center gap-2 sm:gap-4 overflow-x-auto no-scrollbar">
           <button 
@@ -2670,16 +3036,57 @@ function App() {
           ))}
         </div>
       </div>
+      )}
 
       {/* Menu Grid */}
-      <section id="menu" className="py-12 sm:py-16 md:py-24 container mx-auto px-3 sm:px-4">
-        <div className="flex flex-col items-center mb-8 sm:mb-12 md:mb-16 text-center">
-          <span className="text-orange-700 font-black uppercase tracking-[0.3em] text-[10px] sm:text-xs mb-3 sm:mb-4">Seleção Especial</span>
-          <h3 className="text-3xl sm:text-4xl md:text-5xl font-black text-stone-900 tracking-tighter">Nosso Cardápio</h3>
-          <div className="w-16 sm:w-20 h-1 sm:h-1.5 bg-orange-700 rounded-full mt-4 sm:mt-6" />
-        </div>
+      <section id="menu" className={`${showMenuFirstMobile ? 'pt-3 pb-12' : 'py-12 sm:py-16 md:py-24'} container mx-auto px-3 sm:px-4`}>
+        {!showMenuFirstMobile && (
+          <div className="mb-8 flex flex-col items-center text-center sm:mb-12 md:mb-16">
+            <span className="mb-3 text-[10px] font-black uppercase tracking-[0.3em] text-orange-700 sm:mb-4 sm:text-xs">{storefrontText.menuBadge}</span>
+            <h3 className="text-3xl font-black tracking-tighter text-stone-900 sm:text-4xl md:text-5xl">{storefrontText.menuTitle}</h3>
+            <div className="mt-4 h-1 w-16 rounded-full bg-orange-700 sm:mt-6 sm:h-1.5 sm:w-20" />
+          </div>
+        )}
+
+        {!showMenuFirstMobile && featuredPratoDoDia && (
+          <div className="mx-auto mb-10 max-w-4xl text-center sm:mb-14">
+            <p className="mb-4 text-xs font-black uppercase tracking-[0.35em] text-orange-700">
+              Prato do Dia
+            </p>
+            <article className="overflow-hidden rounded-[2.5rem] border border-orange-100 bg-white shadow-[0_24px_80px_rgba(0,0,0,0.08)]">
+              <div className="relative h-[280px] sm:h-[360px] md:h-[430px]">
+                <img
+                  src={featuredPratoDoDia.image || "https://images.unsplash.com/photo-1514327605112-b887c0e61c0a?q=80&w=2070&auto=format&fit=crop"}
+                  alt={featuredPratoDoDia.name}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-stone-950/50 via-transparent to-transparent" />
+                <div className="absolute right-4 top-4 rounded-2xl bg-white/95 px-5 py-3 text-xl font-black text-orange-700 shadow-xl sm:right-6 sm:top-6 sm:text-2xl">
+                  {featuredPratoDoDia.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </div>
+              </div>
+              <div className="px-6 py-8 sm:px-10 sm:py-10">
+                <h4 className="text-3xl font-black tracking-tight text-stone-900 sm:text-4xl md:text-5xl">
+                  {featuredPratoDoDia.name}
+                </h4>
+                <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-stone-600 sm:text-lg">
+                  {featuredPratoDoDia.description}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => addToCart(featuredPratoDoDia)}
+                  className="mt-8 inline-flex items-center justify-center gap-3 rounded-[1.5rem] bg-orange-700 px-10 py-4 text-sm font-black uppercase tracking-widest text-white transition-all hover:bg-orange-800 active:scale-95 sm:text-base"
+                >
+                  <Plus size={18} />
+                  Adicionar
+                </button>
+              </div>
+            </article>
+          </div>
+        )}
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 md:gap-10">
+        <div className={`grid ${showMenuFirstMobile ? 'grid-cols-1 gap-4' : 'grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 sm:gap-8 md:gap-10'}`}>
           <AnimatePresence mode="popLayout">
             {filteredItems.map(item => (
               <motion.div 
@@ -2688,20 +3095,22 @@ function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 key={item.id} 
-                className="bg-white rounded-2xl sm:rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.04)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.08)] transition-all overflow-hidden border border-orange-100 group flex flex-col h-full"
+                className={`${showMenuFirstMobile ? 'bg-white rounded-[1.75rem] shadow-[0_12px_30px_rgba(0,0,0,0.05)] border border-orange-100 overflow-hidden flex flex-col' : 'bg-white rounded-2xl sm:rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.04)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.08)] transition-all overflow-hidden border border-orange-100 group flex flex-col h-full cursor-pointer'}`}
                 style={{ pointerEvents: 'auto' }}
                 onClick={(e) => {
-                  // Prevent card click from interfering with button clicks
                   if ((e.target as HTMLElement).closest('button')) {
                     return;
                   }
+                  if (!showMenuFirstMobile) {
+                    setSelectedMenuItem(item);
+                  }
                 }}
               >
-                <div className="h-48 sm:h-64 md:h-72 relative overflow-hidden shrink-0">
+                <div className={`${showMenuFirstMobile ? 'h-44' : 'h-48 sm:h-64 md:h-72'} relative overflow-hidden shrink-0`}>
                   <img 
                     key={`item-${item.id}-${item.image ? item.image.substring(0, 30) : 'no-image'}`}
                     src={item.image || "https://images.unsplash.com/photo-1514327605112-b887c0e61c0a?q=80&w=2070&auto=format&fit=crop"} 
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" 
+                    className={`h-full w-full object-cover ${showMenuFirstMobile ? '' : 'group-hover:scale-110 transition-transform duration-700'}`} 
                     alt={item.name} 
                     loading="lazy"
                     onError={(e) => {
@@ -2718,22 +3127,35 @@ function App() {
                       <span className="text-white font-black uppercase tracking-widest text-sm sm:text-lg px-4 sm:px-6 py-1.5 sm:py-2 border-2 border-white/30 rounded-full">Esgotado</span>
                     </div>
                   )}
-                  <div className="absolute top-3 right-3 sm:top-6 sm:right-6 bg-white/95 backdrop-blur shadow-xl px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl font-black text-orange-700 text-sm sm:text-lg">
+                  <div className={`${showMenuFirstMobile ? 'top-3 right-3 rounded-xl px-3 py-1.5 text-sm' : 'top-3 right-3 sm:top-6 sm:right-6 rounded-xl sm:rounded-2xl px-3 py-1.5 sm:px-4 sm:py-2 text-sm sm:text-lg'} absolute bg-white/95 backdrop-blur shadow-xl font-black text-orange-700`}>
                     {item.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </div>
                 </div>
-                <div className="p-4 sm:p-6 md:p-8 flex flex-col flex-1">
-                  <h4 className="text-lg sm:text-xl md:text-2xl font-black text-stone-900 mb-2 sm:mb-3 group-hover:text-orange-700 transition-colors">{item.name}</h4>
-                  <p className="text-stone-500 text-xs sm:text-sm mb-4 sm:mb-6 md:mb-8 leading-relaxed line-clamp-4">{item.description}</p>
+                <div className={`${showMenuFirstMobile ? 'p-4' : 'p-4 sm:p-6 md:p-8'} flex flex-col flex-1`}>
+                  <h4 className={`${showMenuFirstMobile ? 'text-xl mb-2' : 'text-lg sm:text-xl md:text-2xl mb-2 sm:mb-3 group-hover:text-orange-700 transition-colors'} font-black text-stone-900`}>{item.name}</h4>
+                  <p className={`${showMenuFirstMobile ? 'mb-4 text-sm line-clamp-2' : 'mb-4 sm:mb-6 md:mb-8 text-xs sm:text-sm line-clamp-4'} text-stone-500 leading-relaxed`}>{item.description}</p>
+                  {!showMenuFirstMobile && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSelectedMenuItem(item);
+                      }}
+                      className="mb-3 sm:mb-4 w-full rounded-xl border border-orange-200 py-3 text-[11px] font-black uppercase tracking-widest text-orange-700 transition-all hover:bg-orange-50 active:scale-95 sm:rounded-[1.25rem] sm:text-xs"
+                    >
+                      Ver detalhes
+                    </button>
+                  )}
                   <button 
                     type="button"
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      console.log('🔘 Add button clicked for:', item.name, 'Available:', item.available);
+                      console.log('ðŸ”˜ Add button clicked for:', item.name, 'Available:', item.available);
                       if (!item.available) {
-                        console.warn('⚠️ Cannot add unavailable item:', item.name);
-                        alert('Este item não está disponível no momento.');
+                        console.warn('âš ï¸ Cannot add unavailable item:', item.name);
+                        alert('Este item nao esta disponivel no momento.');
                         return;
                       }
                       addToCart(item);
@@ -2749,7 +3171,7 @@ function App() {
                       e.stopPropagation();
                     }}
                     disabled={!item.available} 
-                    className="mt-auto w-full bg-stone-50 hover:bg-orange-700 text-stone-800 hover:text-white font-black py-3 sm:py-4 md:py-5 rounded-xl sm:rounded-[1.5rem] transition-all flex items-center justify-center gap-2 sm:gap-3 disabled:opacity-30 disabled:cursor-not-allowed group/btn text-xs sm:text-sm active:scale-95 relative z-20 touch-manipulation"
+                    className={`${showMenuFirstMobile ? 'py-4 rounded-2xl text-sm bg-orange-700 text-white hover:bg-orange-800' : 'py-3 sm:py-4 md:py-5 rounded-xl sm:rounded-[1.5rem] text-xs sm:text-sm bg-stone-50 hover:bg-orange-700 text-stone-800 hover:text-white'} mt-auto w-full font-black transition-all flex items-center justify-center gap-2 sm:gap-3 disabled:opacity-30 disabled:cursor-not-allowed group/btn active:scale-95 relative z-20 touch-manipulation`}
                     style={{ 
                       pointerEvents: 'auto', 
                       zIndex: 20,
@@ -2758,7 +3180,7 @@ function App() {
                       WebkitTapHighlightColor: 'transparent'
                     }}
                   >
-                    <Plus size={16} className="sm:w-5 sm:h-5 group-hover/btn:rotate-90 transition-transform" /> 
+                    <Plus size={16} className={`${showMenuFirstMobile ? '' : 'sm:w-5 sm:h-5 group-hover/btn:rotate-90 transition-transform'}`} /> 
                     ADICIONAR
                   </button>
                 </div>
@@ -2768,96 +3190,165 @@ function App() {
         </div>
       </section>
 
+      <AnimatePresence>
+        {selectedMenuItem && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] bg-stone-950/70 backdrop-blur-sm p-3 sm:p-6"
+            onClick={() => setSelectedMenuItem(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 30, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+              className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-[2rem] bg-white shadow-[0_30px_120px_rgba(0,0,0,0.25)]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-orange-100 px-4 py-4 sm:px-6">
+                <button
+                  type="button"
+                  onClick={() => setSelectedMenuItem(null)}
+                  className="rounded-full bg-orange-50 px-4 py-2 text-[11px] font-black uppercase tracking-widest text-orange-700 transition hover:bg-orange-100"
+                >
+                  Voltar para a home
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMenuItem(null)}
+                  className="rounded-full p-2 text-stone-500 transition hover:bg-stone-100 hover:text-stone-900"
+                  aria-label="Fechar produto"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="grid flex-1 overflow-y-auto md:grid-cols-[1.05fr_0.95fr]">
+                <div className="relative min-h-[260px] bg-orange-50">
+                  <img
+                    src={selectedMenuItem.image || "https://images.unsplash.com/photo-1514327605112-b887c0e61c0a?q=80&w=2070&auto=format&fit=crop"}
+                    alt={selectedMenuItem.name}
+                    className="h-full w-full object-cover"
+                  />
+                  <div className="absolute right-4 top-4 rounded-2xl bg-white/95 px-4 py-2 text-base font-black text-orange-700 shadow-xl sm:right-6 sm:top-6 sm:text-lg">
+                    {selectedMenuItem.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </div>
+                </div>
+
+                <div className="flex flex-col p-5 sm:p-8">
+                  <span className="text-[10px] font-black uppercase tracking-[0.28em] text-orange-700">
+                    {categories.find((category) => category.id === selectedMenuItem.category)?.name || 'Cardapio'}
+                  </span>
+                  <h3 className="mt-3 text-3xl font-black tracking-tight text-stone-900 sm:text-4xl">
+                    {selectedMenuItem.name}
+                  </h3>
+                  <p className="mt-4 text-sm leading-relaxed text-stone-600 sm:text-base">
+                    {selectedMenuItem.description}
+                  </p>
+
+                  <div className="mt-6 rounded-[1.75rem] bg-orange-50 p-5">
+                    <p className="text-sm font-black text-stone-900">Resumo do pedido</p>
+                    <p className="mt-2 text-sm leading-relaxed text-stone-600">
+                      Toque em adicionar para incluir este item no carrinho e continuar montando seu pedido.
+                    </p>
+                  </div>
+
+                  <div className="mt-auto pt-8">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!selectedMenuItem.available) {
+                          alert('Este item nao esta disponivel no momento.');
+                          return;
+                        }
+                        addToCart(selectedMenuItem);
+                        setSelectedMenuItem(null);
+                      }}
+                      disabled={!selectedMenuItem.available}
+                      className="w-full rounded-[1.5rem] bg-orange-700 px-6 py-4 text-sm font-black uppercase tracking-widest text-white transition hover:bg-orange-800 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {selectedMenuItem.available ? 'Adicionar ao carrinho' : 'Item indisponivel'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedMenuItem(null);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="mt-3 w-full rounded-[1.5rem] border border-stone-200 bg-white px-6 py-4 text-sm font-black uppercase tracking-widest text-stone-700 transition hover:bg-stone-50"
+                    >
+                      Ir para o inicio
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* About Section */}
+      {!showMenuFirstMobile && (
       <section id="about" className="py-16 sm:py-24 md:py-32 bg-stone-900 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-1/3 h-full bg-orange-700/5 rotate-12 translate-x-1/2" />
         <div className="container mx-auto px-3 sm:px-4 grid md:grid-cols-2 gap-12 sm:gap-16 md:gap-24 items-center relative z-10">
           <div>
-            <span className="text-orange-400 font-black tracking-[0.3em] uppercase text-[10px] sm:text-xs mb-4 sm:mb-6 block">Tradição & Família</span>
-            <h3 className="text-3xl sm:text-4xl md:text-5xl lg:text-7xl font-black text-white mb-6 sm:mb-8 tracking-tighter leading-[0.9]">Sabor e dedicação em cada detalhe</h3>
+            <span className="text-orange-400 font-black tracking-[0.3em] uppercase text-[10px] sm:text-xs mb-4 sm:mb-6 block">{storefrontText.aboutBadge}</span>
+            <h3 className="text-3xl sm:text-4xl md:text-5xl lg:text-7xl font-black text-white mb-6 sm:mb-8 tracking-tighter leading-[0.9]">{storefrontText.aboutTitle}</h3>
             <p className="text-stone-400 text-base sm:text-lg md:text-xl leading-relaxed mb-8 sm:mb-10 md:mb-12 font-medium">
-              O Sabor Caseiro nasceu para unir cardápio organizado, sabor marcante e uma apresentação mais profissional para cada cliente.
+              {storefrontText.aboutSubtitle}
             </p>
-            <div className="grid grid-cols-2 gap-4 sm:gap-6 md:gap-10">
-              <div className="p-4 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10">
-                <span className="block text-2xl sm:text-3xl md:text-4xl font-black text-orange-400 mb-1 sm:mb-2">100%</span>
-                <span className="text-stone-500 font-bold uppercase tracking-widest text-[10px] sm:text-xs">Foco na Apresentação</span>
+            <div className="hidden sm:grid grid-cols-2 gap-3 sm:gap-6 md:gap-10 items-start">
+              <div className="p-3 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10 min-h-[132px] sm:min-h-0 flex flex-col justify-start">
+                <span className="block text-[28px] leading-none sm:text-3xl md:text-4xl font-black text-orange-400 mb-2 sm:mb-2">+comodidade</span>
+                <span className="text-stone-500 font-bold uppercase tracking-[0.18em] text-[9px] leading-7 sm:text-xs sm:tracking-widest sm:leading-normal">Cardapio, pedido e entrega</span>
               </div>
-              <div className="p-4 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10">
-                <span className="block text-2xl sm:text-3xl md:text-4xl font-black text-orange-400 mb-1 sm:mb-2">24h</span>
-                <span className="text-stone-500 font-bold uppercase tracking-widest text-[10px] sm:text-xs">Presença Online</span>
+              <div className="p-3 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10 min-h-[132px] sm:min-h-0 flex flex-col justify-start">
+                <span className="block text-[28px] leading-none sm:text-3xl md:text-4xl font-black text-orange-400 mb-2 sm:mb-2">+ rapido</span>
+                <span className="text-stone-500 font-bold uppercase tracking-[0.18em] text-[9px] leading-7 sm:text-xs sm:tracking-widest sm:leading-normal">Atendimento com menos atrito</span>
               </div>
             </div>
           </div>
-          <div className="relative group mt-8 md:mt-0">
+          <div className="relative group mt-2 sm:mt-8 md:mt-0">
             <div className="absolute -inset-4 bg-orange-700/20 blur-[100px] rounded-full group-hover:bg-orange-700/30 transition-all duration-700" />
             <div className="grid grid-cols-2 gap-3 sm:gap-4 md:gap-6 relative">
-              {(() => {
-                const getImage1HeightClasses = () => {
-                  if (settings.aboutImage1Size === 'custom' && settings.aboutImage1SizePx) {
-                    return '';
-                  }
-                  const sizeMap: Record<string, string> = {
-                    small: 'h-[150px] sm:h-[200px] md:h-[250px] lg:h-[300px]',
-                    medium: 'h-[200px] sm:h-[300px] md:h-[400px] lg:h-[450px]',
-                    large: 'h-[250px] sm:h-[350px] md:h-[500px] lg:h-[600px]',
-                  };
-                  return sizeMap[settings.aboutImage1Size || 'medium'] || sizeMap.medium;
-                };
-                const image1HeightClasses = getImage1HeightClasses();
-                const image1CustomStyle = settings.aboutImage1Size === 'custom' && settings.aboutImage1SizePx
-                  ? { height: `${settings.aboutImage1SizePx}px` }
-                  : {};
-                return (
-                  <img 
-                    key={`about-1-${settings.aboutImage1 ? settings.aboutImage1.substring(0, 30) : 'default'}`}
-                    src={settings.aboutImage1 || "https://images.unsplash.com/photo-1544148103-0773bf10d330?q=80&w=2070&auto=format&fit=crop"} 
-                    className={`rounded-2xl sm:rounded-3xl ${image1HeightClasses} w-full object-cover shadow-2xl rotate-3`}
-                    style={image1CustomStyle}
-                    alt="Ambiente"
-                    loading="lazy"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.src = "https://images.unsplash.com/photo-1544148103-0773bf10d330?q=80&w=2070&auto=format&fit=crop";
-                    }}
-                  />
-                );
-              })()}
-              {(() => {
-                const getImage2HeightClasses = () => {
-                  if (settings.aboutImage2Size === 'custom' && settings.aboutImage2SizePx) {
-                    return '';
-                  }
-                  const sizeMap: Record<string, string> = {
-                    small: 'h-[150px] sm:h-[200px] md:h-[250px] lg:h-[300px]',
-                    medium: 'h-[200px] sm:h-[300px] md:h-[400px] lg:h-[450px]',
-                    large: 'h-[250px] sm:h-[350px] md:h-[500px] lg:h-[600px]',
-                  };
-                  return sizeMap[settings.aboutImage2Size || 'medium'] || sizeMap.medium;
-                };
-                const image2HeightClasses = getImage2HeightClasses();
-                const image2CustomStyle = settings.aboutImage2Size === 'custom' && settings.aboutImage2SizePx
-                  ? { height: `${settings.aboutImage2SizePx}px` }
-                  : {};
-                return (
-                  <img 
-                    key={`about-2-${settings.aboutImage2 ? settings.aboutImage2.substring(0, 30) : 'default'}`}
-                    src={settings.aboutImage2 || "https://images.unsplash.com/photo-1541544741938-0af808871cc0?q=80&w=2069&auto=format&fit=crop"} 
-                    className={`rounded-2xl sm:rounded-3xl ${image2HeightClasses} w-full object-cover shadow-2xl -rotate-3 mt-6 sm:mt-8 md:mt-12`}
-                    style={image2CustomStyle}
-                    alt="Comida"
-                    loading="lazy"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.src = "https://images.unsplash.com/photo-1541544741938-0af808871cc0?q=80&w=2069&auto=format&fit=crop";
-                    }}
-                  />
-                );
-              })()}
+              <img
+                key={`about-1-${(settings.aboutImage1 || heroForegroundImage).substring(0, 30)}`}
+                src={settings.aboutImage1 || heroForegroundImage}
+                className="rounded-2xl sm:rounded-3xl h-[200px] sm:h-[300px] md:h-[400px] lg:h-[450px] w-full object-cover shadow-2xl rotate-3"
+                alt="Marca Granatto"
+                loading="lazy"
+              />
+              <div className="mt-3 sm:mt-8 md:mt-12 rounded-2xl sm:rounded-3xl h-[220px] sm:h-[300px] md:h-[400px] lg:h-[450px] w-full bg-gradient-to-br from-orange-500 via-orange-700 to-stone-900 text-white shadow-2xl -rotate-3 p-4 sm:p-8 flex flex-col justify-start md:justify-between overflow-hidden">
+                <div>
+                  <p className="text-[10px] sm:text-xs font-black uppercase tracking-[0.3em] text-orange-100/80">Experiencia</p>
+                  <h4 className="mt-2 text-xl sm:text-3xl font-black tracking-tight">{storefrontText.experienceTitle}</h4>
+                  <p className="mt-2 text-xs sm:text-base text-orange-50/85 leading-relaxed">
+                    {storefrontText.experienceSubtitle}
+                  </p>
+                </div>
+                <div className="-mt-1 space-y-1.5 text-[11px] sm:text-sm font-bold md:mt-0 md:space-y-3">
+                  <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-1.5 backdrop-blur-sm sm:gap-3 sm:px-4 sm:py-3">
+                    <CheckCircle size={16} />
+                    <span>{storefrontText.featureOne}</span>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-1.5 backdrop-blur-sm sm:gap-3 sm:px-4 sm:py-3">
+                    <CreditCard size={16} />
+                    <span>{storefrontText.featureTwo}</span>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-1.5 backdrop-blur-sm sm:gap-3 sm:px-4 sm:py-3">
+                    <Truck size={16} />
+                    <span>{storefrontText.featureThree || 'Entrega com dados completos'}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </section>
+      )}
 
       {/* Contact Section */}
       <section id="contact" className="py-12 sm:py-20 md:py-32 bg-white">
@@ -2875,14 +3366,14 @@ function App() {
               <div className="w-16 h-16 sm:w-20 sm:h-20 bg-white text-green-700 rounded-2xl sm:rounded-3xl flex items-center justify-center mb-6 sm:mb-8 mx-auto shadow-xl group-hover:scale-110 transition-transform">
                 <MapPin size={24} className="sm:w-8 sm:h-8" />
               </div>
-              <h4 className="font-black text-xl sm:text-2xl mb-3 sm:mb-4 tracking-tight">Endereço</h4>
-              <p className="text-stone-500 font-medium leading-relaxed text-sm sm:text-base">{settings.address || 'Endereço não informado'}</p>
+              <h4 className="font-black text-xl sm:text-2xl mb-3 sm:mb-4 tracking-tight">Endereco</h4>
+              <p className="text-stone-500 font-medium leading-relaxed text-sm sm:text-base">{settings.address || 'Endereco nao informado'}</p>
             </div>
             <div className="p-6 sm:p-8 md:p-12 bg-stone-50 rounded-2xl sm:rounded-3xl text-center border border-stone-100 hover:border-orange-200 transition-colors group">
               <div className="w-16 h-16 sm:w-20 sm:h-20 bg-white text-amber-600 rounded-2xl sm:rounded-3xl flex items-center justify-center mb-6 sm:mb-8 mx-auto shadow-xl group-hover:scale-110 transition-transform">
                 <Clock size={24} className="sm:w-8 sm:h-8" />
               </div>
-              <h4 className="font-black text-xl sm:text-2xl mb-3 sm:mb-4 tracking-tight">Horários</h4>
+              <h4 className="font-black text-xl sm:text-2xl mb-3 sm:mb-4 tracking-tight">Horarios</h4>
               <div className="space-y-1">
                 {Object.entries(settings.openingHours || {}).map(([day, hours]) => (
                   <p key={day} className="text-stone-500 font-medium text-xs sm:text-sm">
@@ -2897,31 +3388,41 @@ function App() {
       </section>
 
       {/* Footer */}
-      <footer className="bg-orange-50 py-12 sm:py-16 md:py-24 border-t border-orange-100">
+      <footer className="bg-orange-50 py-8 sm:py-16 md:py-24 border-t border-orange-100">
         <div className="container mx-auto px-3 sm:px-4 text-center">
-          <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mb-3 sm:mb-4 tracking-tighter">{settings.name || 'Sabor Caseiro'}</h2>
-          <p className="text-stone-500 font-medium max-w-lg mx-auto mb-8 sm:mb-12 leading-relaxed text-sm sm:text-base">Cardápio digital, atendimento mais organizado e uma presença online feita para transmitir mais valor ao seu negócio.</p>
-          <div className="flex justify-center gap-6 sm:gap-8 md:gap-10 mb-12 sm:mb-16 flex-wrap">
-            <a href="#" className="text-stone-400 hover:text-orange-700 font-black uppercase text-xs tracking-[0.2em] transition-colors">Instagram</a>
-            <a href="#" className="text-stone-400 hover:text-orange-700 font-black uppercase text-xs tracking-[0.2em] transition-colors">Facebook</a>
-            <a href="#" className="text-stone-400 hover:text-orange-700 font-black uppercase text-xs tracking-[0.2em] transition-colors">Twitter</a>
+          <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mb-2 sm:mb-4 tracking-tighter">{settings.name || 'Granatto'}</h2>
+          <p className="text-stone-500 font-medium max-w-lg mx-auto mb-5 sm:mb-12 leading-relaxed text-sm sm:text-base">Cardapio digital, atendimento mais organizado e uma presenca online feita para transmitir mais valor ao seu negocio.</p>
+          <div className="flex justify-center items-center gap-4 sm:gap-8 md:gap-10 mb-6 sm:mb-16 flex-nowrap">
+            <a href={`https://wa.me/55${(settings.whatsapp || '').replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-stone-400 hover:text-orange-700 font-black uppercase text-[10px] sm:text-xs tracking-[0.16em] sm:tracking-[0.2em] transition-colors whitespace-nowrap">WhatsApp</a>
+            <a href="#contact" className="text-stone-400 hover:text-orange-700 font-black uppercase text-[10px] sm:text-xs tracking-[0.16em] sm:tracking-[0.2em] transition-colors whitespace-nowrap">Contato</a>
+            <a href="/politica-privacidade.html" className="text-stone-400 hover:text-orange-700 font-black uppercase text-[10px] sm:text-xs tracking-[0.16em] sm:tracking-[0.2em] transition-colors whitespace-nowrap">Privacidade</a>
           </div>
-          <div className="pt-12 border-t border-orange-200/50">
-            <p className="text-stone-400 text-xs font-bold uppercase tracking-widest">© 2026 {settings.name || 'Sabor Caseiro'}. Feito para vender com mais presença.</p>
+          <div className="pt-6 sm:pt-12 border-t border-orange-200/50">
+            <p className="text-stone-400 text-xs font-bold uppercase tracking-widest">© 2026 {settings.name || 'Granatto'}. Feito para vender com mais presenca.</p>
           </div>
         </div>
       </footer>
+
+      {false && isNativeApp && !isDesktop && (
+        <button
+          type="button"
+          onClick={openMobileMenuAdmin}
+          className="fixed bottom-10 left-4 z-[150] rounded-[1.25rem] bg-stone-900 px-4 py-3 text-[10px] font-black uppercase tracking-[0.22em] text-white shadow-2xl shadow-stone-900/30 transition hover:bg-stone-800 active:scale-95"
+        >
+          Admin Cardapio
+        </button>
+      )}
 
       {/* Floating Action Button - WhatsApp */}
       <a 
         href={`https://wa.me/55${(settings.whatsapp || '').replace(/\D/g, '')}`} 
         target="_blank" 
         rel="noopener noreferrer" 
-        className="fixed bottom-10 right-10 z-[100] bg-green-600 hover:bg-green-700 text-white p-6 rounded-[2rem] shadow-[0_20px_50px_rgba(22,101,52,0.4)] hover:shadow-[0_20px_50px_rgba(22,101,52,0.6)] transition-all hover:-translate-y-2 active:scale-95 group"
+        className="fixed bottom-20 right-5 sm:bottom-10 sm:right-10 z-[100] bg-green-600 hover:bg-green-700 text-white p-3.5 sm:p-6 rounded-[1.4rem] sm:rounded-[2rem] shadow-[0_20px_50px_rgba(22,101,52,0.4)] hover:shadow-[0_20px_50px_rgba(22,101,52,0.6)] transition-all hover:-translate-y-2 active:scale-95 group"
       >
-        <MessageCircle size={32} />
+        <MessageCircle size={20} className="sm:w-8 sm:h-8" />
         <span className="absolute right-full mr-6 top-1/2 -translate-y-1/2 bg-stone-900 text-white px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-all translate-x-4 group-hover:translate-x-0 pointer-events-none whitespace-nowrap shadow-2xl">
-          Peça pelo WhatsApp
+          {storefrontText.whatsappTooltip}
         </span>
       </a>
 
@@ -2951,10 +3452,18 @@ function App() {
                 </button>
               </div>
               <div className="space-y-2 text-sm font-bold text-stone-700">
+                <p className="rounded-2xl bg-red-50 px-4 py-3 text-center text-base font-black uppercase tracking-widest text-red-600 animate-pulse">
+                  Novo Pedido
+                </p>
                 <p><span className="text-stone-500">Pedido:</span> #{incomingOrderAlert.id}</p>
                 <p><span className="text-stone-500">Cliente:</span> {incomingOrderAlert.customerName}</p>
                 <p><span className="text-stone-500">WhatsApp:</span> {incomingOrderAlert.customerPhone}</p>
                 <p><span className="text-stone-500">Total:</span> {incomingOrderAlert.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                {settings.printing?.autoPrintNewOrders && (
+                  <p className="rounded-2xl bg-blue-50 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-blue-700">
+                    Janela de impressao automatica liberada para este pedido
+                  </p>
+                )}
               </div>
               <div className="mt-6 flex gap-3">
                 <button
@@ -2962,6 +3471,12 @@ function App() {
                   className="flex-1 px-4 py-3 rounded-2xl bg-orange-700 hover:bg-orange-800 text-white font-black uppercase tracking-widest text-xs transition-all active:scale-95"
                 >
                   Abrir painel de pedidos
+                </button>
+                <button
+                  onClick={() => printOrderTicket(incomingOrderAlert)}
+                  className="px-4 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+                >
+                  Imprimir
                 </button>
                 <button
                   onClick={playOrderAlarm}
@@ -2977,7 +3492,7 @@ function App() {
 
       {/* Admin Access Modal - hidden access flow */}
       <AnimatePresence>
-        {isAdminAccessModalOpen && isDesktop && (
+        {isAdminAccessModalOpen && (
           <div className="fixed inset-0 z-[210] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
@@ -3019,9 +3534,230 @@ function App() {
                   type="submit"
                   className="w-full px-4 py-3 rounded-2xl bg-orange-700 hover:bg-orange-800 text-white font-black uppercase tracking-widest text-xs transition-all active:scale-95"
                 >
-                  Entrar no painel
+                  {adminAccessTarget === 'mobile-menu' ? 'Entrar no admin do cardapio' : 'Entrar no painel'}
                 </button>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {false && isMobileMenuAdminOpen && !isDesktop && isAdminAuthenticated && (
+          <div className="fixed inset-0 z-[205] flex items-center justify-center p-2">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-stone-900/90 backdrop-blur-md"
+              onClick={() => setIsMobileMenuAdminOpen(false)}
+            />
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0, y: 12 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 12 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative flex h-[calc(100vh-1rem)] w-full max-w-3xl flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl"
+            >
+              <div className="border-b border-stone-100 bg-stone-50/80 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-orange-700">Admin do App</p>
+                    <h3 className="mt-1 text-2xl font-black tracking-tight text-stone-900">Cardapio</h3>
+                  </div>
+                  <button
+                    onClick={() => setIsMobileMenuAdminOpen(false)}
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-stone-500 shadow-md transition hover:bg-red-50 hover:text-red-500"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={() => setMobileMenuAdminTab('items')}
+                    className={`flex-1 rounded-2xl px-4 py-3 text-[11px] font-black uppercase tracking-widest transition ${mobileMenuAdminTab === 'items' ? 'bg-orange-700 text-white' : 'bg-white text-stone-500'}`}
+                  >
+                    Produtos
+                  </button>
+                  <button
+                    onClick={() => setMobileMenuAdminTab('categories')}
+                    className={`flex-1 rounded-2xl px-4 py-3 text-[11px] font-black uppercase tracking-widest transition ${mobileMenuAdminTab === 'categories' ? 'bg-orange-700 text-white' : 'bg-white text-stone-500'}`}
+                  >
+                    Categorias
+                  </button>
+                </div>
+
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => openNewItemModal()}
+                    className="flex-1 rounded-2xl bg-stone-900 px-4 py-3 text-[11px] font-black uppercase tracking-widest text-white"
+                  >
+                    Novo Produto
+                  </button>
+                  <button
+                    onClick={() => void saveMenuAdminChanges()}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-3 text-[11px] font-black uppercase tracking-widest text-white"
+                  >
+                    <Save size={14} /> Salvar
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-4 py-4">
+                {mobileMenuAdminTab === 'items' && (
+                  <div className="space-y-3">
+                    {[...items]
+                      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+                      .map((item) => (
+                        <article key={item.id} className="rounded-[1.75rem] border border-stone-100 bg-white p-4 shadow-sm">
+                          <div className="flex gap-3">
+                            <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-stone-100">
+                              {item.image ? (
+                                <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-stone-300">
+                                  <ImageIcon size={24} />
+                                </div>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <h4 className="truncate text-base font-black text-stone-900">{item.name}</h4>
+                                  <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-orange-700">
+                                    {categories.find((category) => category.id === item.category)?.name || 'Sem categoria'}
+                                  </p>
+                                </div>
+                                <span className="shrink-0 rounded-full bg-orange-50 px-3 py-1 text-xs font-black text-orange-700">
+                                  {item.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                </span>
+                              </div>
+                              <p className="mt-2 line-clamp-2 text-sm text-stone-500">{item.description}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 grid grid-cols-3 gap-2">
+                            <button
+                              onClick={() => openEditItemModal(item)}
+                              className="flex items-center justify-center gap-2 rounded-2xl bg-stone-100 px-3 py-3 text-[11px] font-black uppercase tracking-widest text-stone-700"
+                            >
+                              <Edit size={14} /> Editar
+                            </button>
+                            <button
+                              onClick={() => {
+                                setItems((prevItems) =>
+                                  prevItems.map((currentItem) =>
+                                    currentItem.id === item.id
+                                      ? { ...currentItem, available: !currentItem.available }
+                                      : currentItem
+                                  )
+                                );
+                              }}
+                              className={`rounded-2xl px-3 py-3 text-[11px] font-black uppercase tracking-widest ${item.available ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}
+                            >
+                              {item.available ? 'Disponivel' : 'Indisponivel'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Excluir "${item.name}" do cardapio?`)) {
+                                  setItems((prevItems) => prevItems.filter((currentItem) => currentItem.id !== item.id));
+                                }
+                              }}
+                              className="flex items-center justify-center gap-2 rounded-2xl bg-red-50 px-3 py-3 text-[11px] font-black uppercase tracking-widest text-red-600"
+                            >
+                              <Trash2 size={14} /> Excluir
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                  </div>
+                )}
+
+                {mobileMenuAdminTab === 'categories' && (
+                  <div className="space-y-3">
+                    <button
+                      onClick={() => {
+                        const name = prompt('Nome da categoria:');
+                        if (!name?.trim()) return;
+                        setCategories((prev) => [...prev, { id: generateId(), name: name.trim() }]);
+                      }}
+                      className="w-full rounded-[1.75rem] border border-dashed border-orange-300 bg-orange-50 px-4 py-4 text-[11px] font-black uppercase tracking-widest text-orange-700"
+                    >
+                      <Plus size={14} className="mr-2 inline-flex" /> Nova Categoria
+                    </button>
+
+                    {categories.map((cat) => {
+                      const itemCount = items.filter((item) => item.category === cat.id).length;
+
+                      return (
+                        <article key={cat.id} className="rounded-[1.75rem] border border-stone-100 bg-white p-4 shadow-sm">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <h4 className="text-base font-black text-stone-900">{cat.name}</h4>
+                              <p className="mt-1 text-xs font-bold text-stone-500">{itemCount} item(ns)</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  const newName = prompt('Editar categoria:', cat.name);
+                                  if (!newName?.trim()) return;
+                                  setCategories((prev) => prev.map((currentCat) => currentCat.id === cat.id ? { ...currentCat, name: newName.trim() } : currentCat));
+                                }}
+                                className="rounded-2xl bg-stone-100 px-3 py-3 text-[11px] font-black uppercase tracking-widest text-stone-700"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (categories.length === 1) {
+                                    alert('Mantenha pelo menos uma categoria no cardapio.');
+                                    return;
+                                  }
+
+                                  const fallbackCategory = categories.find((currentCat) => currentCat.id !== cat.id);
+                                  if (!fallbackCategory) return;
+
+                                  if (!window.confirm(`Excluir a categoria "${cat.name}"? Os itens dela serao movidos para "${fallbackCategory.name}".`)) {
+                                    return;
+                                  }
+
+                                  setItems((prevItems) =>
+                                    prevItems.map((item) =>
+                                      item.category === cat.id ? { ...item, category: fallbackCategory.id } : item
+                                    )
+                                  );
+                                  setCategories((prev) => prev.filter((currentCat) => currentCat.id !== cat.id));
+                                }}
+                                className="rounded-2xl bg-red-50 px-3 py-3 text-[11px] font-black uppercase tracking-widest text-red-600"
+                              >
+                                Excluir
+                              </button>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-stone-100 bg-white px-4 py-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => void saveMenuAdminChanges()}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-4 text-[11px] font-black uppercase tracking-widest text-white"
+                  >
+                    <Save size={14} /> Salvar
+                  </button>
+                  <button
+                    onClick={handleAdminLogout}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-stone-200 px-4 py-4 text-[11px] font-black uppercase tracking-widest text-stone-700"
+                  >
+                    <LogOut size={14} /> Sair
+                  </button>
+                </div>
+              </div>
             </motion.div>
           </div>
         )}
@@ -3051,7 +3787,7 @@ function App() {
                   </div>
                   <div className="min-w-0">
                     <h3 className="text-xl sm:text-3xl md:text-4xl font-black text-stone-900 tracking-tighter truncate">Painel de Controle</h3>
-                    <p className="text-stone-400 font-bold uppercase text-[9px] sm:text-[10px] tracking-widest mt-1 hidden sm:block">Gestão Administrativa do Restaurante</p>
+                    <p className="text-stone-400 font-bold uppercase text-[9px] sm:text-[10px] tracking-widest mt-1 hidden sm:block">GestÃ£o Administrativa do Restaurante</p>
                   </div>
                 </div>
                 <button 
@@ -3076,8 +3812,8 @@ function App() {
                         lastSyncStatus.success ? 'text-green-700' : 'text-yellow-700'
                       }`}>
                         {lastSyncStatus.success 
-                          ? `✅ Última sincronização: ${lastSyncStatus.time || 'Nunca'}`
-                          : '⚠️ Armazenamento temporário - Faça backup regularmente'
+                          ? `âœ… Ãšltima sincronizaÃ§Ã£o: ${lastSyncStatus.time || 'Nunca'}`
+                          : 'âš ï¸ Armazenamento temporÃ¡rio - FaÃ§a backup regularmente'
                         }
                       </p>
                       {lastSyncStatus.error && (
@@ -3093,13 +3829,13 @@ function App() {
                       button.disabled = true;
                       const success = await syncToCloud();
                       if (success) {
-                        button.textContent = '✅ Sincronizado!';
+                        button.textContent = 'âœ… Sincronizado!';
                         setTimeout(() => {
                           button.textContent = originalText || 'Sincronizar Agora';
                           button.disabled = false;
                         }, 2000);
                       } else {
-                        button.textContent = '❌ Erro';
+                        button.textContent = 'âŒ Erro';
                         setTimeout(() => {
                           button.textContent = originalText || 'Sincronizar Agora';
                           button.disabled = false;
@@ -3108,12 +3844,12 @@ function App() {
                     }}
                     className="px-4 sm:px-6 py-2 sm:py-2.5 bg-orange-700 hover:bg-orange-800 text-white font-black uppercase tracking-widest rounded-xl sm:rounded-2xl transition-all active:scale-95 text-[10px] sm:text-xs whitespace-nowrap flex-shrink-0 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    ☁️ Sincronizar Agora
+                    â˜ï¸ Sincronizar Agora
                   </button>
                 </div>
                 <div className="mt-2 pt-2 border-t border-yellow-200/50">
                   <p className="text-[10px] text-yellow-700/80 font-medium">
-                    ⚠️ <strong>Importante:</strong> O armazenamento na nuvem é temporário. Sempre faça backup completo antes de fechar o navegador.
+                    âš ï¸ <strong>Importante:</strong> O armazenamento na nuvem Ã© temporÃ¡rio. Sempre faÃ§a backup completo antes de fechar o navegador.
                   </p>
                 </div>
               </div>
@@ -3123,9 +3859,9 @@ function App() {
                 <div className="flex gap-2 p-3">
                   {[
                     { id: 'orders', icon: ShoppingCart, label: 'Pedidos' },
-                    { id: 'items', icon: MenuIcon, label: 'Cardápio' },
+                    { id: 'items', icon: MenuIcon, label: 'Cardapio' },
                     { id: 'categories', icon: Plus, label: 'Categorias' },
-                    { id: 'settings', icon: Settings, label: 'Configurações' }
+                    { id: 'settings', icon: Settings, label: 'ConfiguraÃ§Ãµes' }
                   ].map(tab => (
                     <button 
                       key={tab.id}
@@ -3153,9 +3889,9 @@ function App() {
                 <aside className="hidden md:flex w-80 border-r border-stone-100 p-8 flex-col gap-3 bg-stone-50/30">
                   {[
                     { id: 'orders', icon: ShoppingCart, label: 'Pedidos' },
-                    { id: 'items', icon: MenuIcon, label: 'Cardápio' },
+                    { id: 'items', icon: MenuIcon, label: 'Cardapio' },
                     { id: 'categories', icon: Plus, label: 'Categorias' },
-                    { id: 'settings', icon: Settings, label: 'Configurações' }
+                    { id: 'settings', icon: Settings, label: 'ConfiguraÃ§Ãµes' }
                   ].map(tab => (
                     <button 
                       key={tab.id}
@@ -3192,18 +3928,73 @@ function App() {
                       <div className="flex justify-between items-end">
                         <div>
                           <h4 className="text-4xl font-black text-stone-900 tracking-tighter mb-2">Pedidos Recebidos</h4>
-                          <p className="text-stone-400 font-bold text-xs uppercase tracking-widest">Acompanhe e gerencie as solicitações</p>
+                          <p className="text-stone-400 font-bold text-xs uppercase tracking-widest">Acompanhe e gerencie as solicitaÃ§Ãµes</p>
                         </div>
                       </div>
+
+                      <div className="space-y-4 rounded-[2rem] border border-stone-100 bg-stone-50/70 p-5">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Filtros rÃ¡pidos</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { id: 'all', label: 'Todos' },
+                            { id: 'pending', label: 'Pendentes' },
+                            { id: 'preparing', label: 'Em preparo' },
+                            { id: 'delivered', label: 'Entregues' },
+                            { id: 'cancelled', label: 'Cancelados' },
+                          ].map((filter) => (
+                            <button
+                              key={filter.id}
+                              type="button"
+                              onClick={() => setOrderStatusFilter(filter.id as 'all' | Order['status'])}
+                              className={`rounded-full px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
+                                orderStatusFilter === filter.id
+                                  ? 'bg-stone-900 text-white'
+                                  : 'bg-white text-stone-500 border border-stone-200 hover:bg-stone-100'
+                              }`}
+                            >
+                              {filter.label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { id: 'all', label: 'Sem filtro' },
+                            { id: 'awaiting_pix', label: 'PIX aguardando' },
+                            { id: 'approved', label: 'Pagamento aprovado' },
+                            { id: 'money_change', label: 'Com troco' },
+                            { id: 'notes', label: 'Com observaÃ§Ã£o' },
+                          ].map((filter) => (
+                            <button
+                              key={filter.id}
+                              type="button"
+                              onClick={() => setOrderPaymentFilter(filter.id as 'all' | 'awaiting_pix' | 'approved' | 'money_change' | 'notes')}
+                              className={`rounded-full px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
+                                orderPaymentFilter === filter.id
+                                  ? 'bg-orange-700 text-white'
+                                  : 'bg-white text-stone-500 border border-stone-200 hover:bg-stone-100'
+                              }`}
+                            >
+                              {filter.label}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs font-bold text-stone-500">
+                          Exibindo {filteredAdminOrders.length} de {orders.length} pedido(s).
+                        </p>
+                      </div>
                       
-                      {orders.length === 0 ? (
+                      {filteredAdminOrders.length === 0 ? (
                         <div className="py-32 flex flex-col items-center justify-center bg-stone-50 rounded-[3rem] border-4 border-dashed border-stone-100 text-stone-300">
                           <ShoppingCart size={80} strokeWidth={1} className="mb-6 opacity-20" />
-                          <p className="font-black uppercase tracking-[0.2em] text-sm">Nenhum pedido no momento</p>
+                          <p className="font-black uppercase tracking-[0.2em] text-sm">
+                            {orders.length === 0 ? 'Nenhum pedido no momento' : 'Nenhum pedido encontrado com esses filtros'}
+                          </p>
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 gap-6">
-                          {orders.map(order => (
+                          {filteredAdminOrders.map(order => (
                             <div key={order.id} className="p-8 bg-white border border-stone-100 rounded-[2.5rem] shadow-[0_10px_30px_rgba(0,0,0,0.02)] hover:shadow-[0_20px_60px_rgba(0,0,0,0.05)] transition-all">
                               <div className="flex flex-wrap justify-between items-start gap-6 mb-8">
                                 <div>
@@ -3221,6 +4012,28 @@ function App() {
                                     </span>
                                   </div>
                                   <p className="text-stone-400 font-bold text-xs uppercase tracking-widest">{new Date(order.createdAt).toLocaleString('pt-BR')}</p>
+                                  <div className="mt-4 flex flex-wrap gap-2">
+                                    {order.paymentStatus === 'awaiting_pix' && (
+                                      <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                        PIX aguardando
+                                      </span>
+                                    )}
+                                    {order.paymentStatus === 'approved' && (
+                                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700">
+                                        Pagamento aprovado
+                                      </span>
+                                    )}
+                                    {typeof order.changeFor === 'number' && (
+                                      <span className="rounded-full bg-green-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-green-700">
+                                        Dinheiro com troco
+                                      </span>
+                                    )}
+                                    {order.notes && (
+                                      <span className="rounded-full bg-orange-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-orange-700">
+                                        ObservaÃ§Ã£o importante
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                                 <div className="text-right">
                                   <p className="text-3xl font-black text-orange-700 tracking-tighter">{order.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
@@ -3240,6 +4053,44 @@ function App() {
                                       <MapPin size={16} className="shrink-0 mt-1" />
                                       <p className="text-sm font-medium leading-relaxed">{order.address}</p>
                                     </div>
+                                    {order.reference && (
+                                      <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-stone-400">ReferÃªncia</p>
+                                        <p className="mt-2 font-bold text-stone-700">{order.reference}</p>
+                                      </div>
+                                    )}
+                                    {order.notes && (
+                                      <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">ObservaÃ§Ãµes</p>
+                                        <p className="mt-2 font-bold text-stone-700">{order.notes}</p>
+                                      </div>
+                                    )}
+                                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                      <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Forma de pagamento</p>
+                                        <p className="mt-2 font-black text-stone-900">{order.paymentMethod}</p>
+                                      </div>
+                                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Status do pagamento</p>
+                                        <p className="mt-2 font-black text-stone-900">
+                                          {order.paymentStatus === 'approved'
+                                            ? 'Aprovado'
+                                            : order.paymentStatus === 'awaiting_pix'
+                                              ? 'Aguardando PIX'
+                                              : order.paymentStatus === 'failed'
+                                                ? 'Falhou'
+                                                : 'Pendente'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    {typeof order.changeFor === 'number' && (
+                                      <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 px-4 py-3">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-green-700">Troco para</p>
+                                        <p className="mt-2 font-black text-stone-900">
+                                          {order.changeFor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                        </p>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                                 <div className="space-y-4">
@@ -3258,6 +4109,12 @@ function App() {
                               </div>
                               
                               <div className="flex flex-wrap gap-3 mt-8">
+                                <button
+                                  onClick={() => printOrderTicket(order)}
+                                  className="px-8 py-4 bg-stone-900 hover:bg-black text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl transition-all active:scale-95"
+                                >
+                                  Imprimir pedido
+                                </button>
                                 {order.status === 'pending' && (
                                   <button 
                                     onClick={() => setOrders(orders.map(o => o.id === order.id ? {...o, status: 'preparing'} : o))}
@@ -3294,7 +4151,7 @@ function App() {
                     <div className="space-y-10">
                       <div className="flex justify-between items-end">
                         <div>
-                          <h4 className="text-4xl font-black text-stone-900 tracking-tighter mb-2">Gerenciar Cardápio</h4>
+                          <h4 className="text-4xl font-black text-stone-900 tracking-tighter mb-2">Gerenciar Cardapio</h4>
                           <p className="text-stone-400 font-bold text-xs uppercase tracking-widest">Adicione e edite seus pratos</p>
                         </div>
                         <button 
@@ -3358,7 +4215,7 @@ function App() {
                                       ) : (
                                         <>
                                           <div className="px-4 py-2 bg-orange-50 border-b border-orange-200 text-[9px] font-black text-orange-700 uppercase tracking-widest sticky top-0 z-10">
-                                            {categories.length} Categoria{categories.length !== 1 ? 's' : ''} Disponíve{categories.length !== 1 ? 'is' : 'l'}
+                                            {categories.length} Categoria{categories.length !== 1 ? 's' : ''} DisponÃ­ve{categories.length !== 1 ? 'is' : 'l'}
                                           </div>
                                           <div 
                                             className="overflow-y-auto"
@@ -3368,7 +4225,7 @@ function App() {
                                             }}
                                           >
                                             {(() => {
-                                              console.log('📋 Rendering ALL categories in dropdown:', {
+                                              console.log('ðŸ“‹ Rendering ALL categories in dropdown:', {
                                                 total: categories.length,
                                                 allCategories: categories.map((c, i) => `${i + 1}. ${c.name} (ID: ${c.id})`)
                                               });
@@ -3398,15 +4255,15 @@ function App() {
                                                     // Auto-save to localStorage
                                                     try {
                                                       localStorage.setItem(tenantStorageKeys.items, JSON.stringify(updatedItems));
-                                                      console.log('✅ Category updated:', {
+                                                      console.log('âœ… Category updated:', {
                                                         item: item.name,
                                                         oldCategory: item.category,
                                                         newCategory: cat.id,
                                                         categoryName: cat.name
                                                       });
                                                     } catch (err) {
-                                                      console.error('❌ Error saving items:', err);
-                                                      alert('Erro ao salvar alteração. Tente novamente.');
+                                                      console.error('âŒ Error saving items:', err);
+                                                      alert('Erro ao salvar alteraÃ§Ã£o. Tente novamente.');
                                                     }
                                                     
                                                     setOpenCategoryDropdown(null);
@@ -3435,7 +4292,7 @@ function App() {
                             </div>
                             <div className="flex items-center gap-4">
                               <div className="flex flex-col items-end mr-4">
-                                <span className="text-[10px] font-black text-stone-300 uppercase tracking-widest mb-2">Disponível</span>
+                                <span className="text-[10px] font-black text-stone-300 uppercase tracking-widest mb-2">DisponÃ­vel</span>
                                 <button 
                                   onClick={() => setItems(items.map(i => i.id === item.id ? {...i, available: !i.available} : i))}
                                   className={`w-14 h-8 rounded-full transition-all relative ${item.available ? 'bg-green-500 shadow-lg shadow-green-500/20' : 'bg-stone-200'}`}
@@ -3506,7 +4363,7 @@ function App() {
                       <div className="flex justify-between items-end">
                         <div>
                           <h4 className="text-4xl font-black text-stone-900 tracking-tighter mb-2">Categorias</h4>
-                          <p className="text-stone-400 font-bold text-xs uppercase tracking-widest">Organize seu cardápio em seções</p>
+                          <p className="text-stone-400 font-bold text-xs uppercase tracking-widest">Organize seu cardÃ¡pio em seÃ§Ãµes</p>
                         </div>
                         <button 
                           onClick={() => {
@@ -3592,7 +4449,7 @@ function App() {
                                     const firstAvailableCategory = currentCategories.find(c => c.id !== cat.id);
                                     
                                     if (firstAvailableCategory) {
-                                      const confirmMessage = `Esta categoria está sendo usada por ${itemCount} item(ns) no cardápio.\n\nDeseja realmente excluir?\n\nOs itens serão movidos para a categoria "${firstAvailableCategory.name}".`;
+                                      const confirmMessage = `Esta categoria estÃ¡ sendo usada por ${itemCount} item(ns) no cardÃ¡pio.\n\nDeseja realmente excluir?\n\nOs itens serÃ£o movidos para a categoria "${firstAvailableCategory.name}".`;
                                       
                                       if (window.confirm(confirmMessage)) {
                                         // Remove category and update items
@@ -3615,7 +4472,7 @@ function App() {
                                       }
                                     } else {
                                       // No other categories available, create a default one
-                                      const confirmMessage = `Esta categoria está sendo usada por ${itemCount} item(ns) no cardápio.\n\nDeseja realmente excluir?\n\nSerá criada uma categoria "Sem Categoria" para os itens.`;
+                                      const confirmMessage = `Esta categoria estÃ¡ sendo usada por ${itemCount} item(ns) no cardÃ¡pio.\n\nDeseja realmente excluir?\n\nSerÃ¡ criada uma categoria "Sem Categoria" para os itens.`;
                                       
                                       if (window.confirm(confirmMessage)) {
                                         // Create default category
@@ -3676,8 +4533,8 @@ function App() {
                     <div className="max-w-3xl space-y-6 sm:space-y-12">
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <div>
-                          <h4 className="text-2xl sm:text-3xl md:text-4xl font-black text-stone-900 tracking-tighter mb-2">Configurações</h4>
-                          <p className="text-stone-400 font-bold text-[10px] sm:text-xs uppercase tracking-widest">Informações públicas do restaurante</p>
+                          <h4 className="text-2xl sm:text-3xl md:text-4xl font-black text-stone-900 tracking-tighter mb-2">ConfiguraÃ§Ãµes</h4>
+                          <p className="text-stone-400 font-bold text-[10px] sm:text-xs uppercase tracking-widest">InformaÃ§Ãµes pÃºblicas do restaurante</p>
                         </div>
                         {/* Mobile Sair Button */}
                         <button 
@@ -3692,7 +4549,7 @@ function App() {
                               localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(settings));
                               localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(categories));
                               localStorage.setItem(tenantStorageKeys.items, JSON.stringify(items));
-                              alert('Todas as alterações foram salvas com sucesso!');
+                              alert('Todas as alteraÃ§Ãµes foram salvas com sucesso!');
                             }}
                             className="px-4 sm:px-8 py-2 sm:py-4 bg-green-600 hover:bg-green-700 text-white font-black uppercase tracking-widest rounded-xl sm:rounded-2xl shadow-xl shadow-green-600/20 transition-all active:scale-95 flex items-center gap-2 text-[10px] sm:text-xs"
                           >
@@ -3765,7 +4622,7 @@ function App() {
                                               : 'bg-white text-stone-600 hover:bg-orange-50'
                                           }`}
                                         >
-                                          Média
+                                          MÃ©dia
                                         </button>
                                         <button
                                           onClick={() => setSettings({...settings, logoSize: 'large'})}
@@ -3816,7 +4673,7 @@ function App() {
 
                           <div className="space-y-4">
                             <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                              <Video size={14} className="text-orange-700" /> Vídeo Promocional (Hero)
+                              <Video size={14} className="text-orange-700" /> VÃ­deo Promocional (Hero)
                             </label>
                             <div className="flex items-center gap-6 p-6 bg-stone-50/50 rounded-3xl border border-stone-100 h-[128px]">
                               <div className="flex-1 space-y-3 text-center">
@@ -3830,13 +4687,13 @@ function App() {
                                       if (file) {
                                         // Check file size (base64 is ~33% larger, so 10MB file becomes ~13MB)
                                         if (file.size > 10 * 1024 * 1024) { // 10MB limit before base64 conversion
-                                          alert('O vídeo deve ter menos de 10MB antes da conversão. Vídeos maiores podem não ser salvos corretamente.');
+                                          alert('O vÃ­deo deve ter menos de 10MB antes da conversÃ£o. VÃ­deos maiores podem nÃ£o ser salvos corretamente.');
                                         }
                                         handleFileUpload(file, (base) => {
                                           // Check base64 size
                                           const base64SizeMB = base.length / 1024 / 1024;
                                           if (base64SizeMB > 8) {
-                                            alert(`Atenção: O vídeo convertido tem ${base64SizeMB.toFixed(2)}MB. Pode não ser salvo se o armazenamento estiver cheio.`);
+                                            alert(`AtenÃ§Ã£o: O vÃ­deo convertido tem ${base64SizeMB.toFixed(2)}MB. Pode nÃ£o ser salvo se o armazenamento estiver cheio.`);
                                           }
                                           const updatedSettings = {...settings, heroVideo: base};
                                           setSettings(updatedSettings);
@@ -3869,10 +4726,10 @@ function App() {
                                                 // Try saving video again
                                                 localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(updatedSettings));
                                                 console.log('Video saved after automatic cleanup');
-                                                alert('Vídeo salvo! Alguns dados antigos foram removidos automaticamente para liberar espaço.');
+                                                alert('VÃ­deo salvo! Alguns dados antigos foram removidos automaticamente para liberar espaÃ§o.');
                                               } catch (retryError) {
                                                 console.error('Failed even after cleanup:', retryError);
-                                                alert('Armazenamento cheio! Não foi possível salvar o vídeo. Vá em Configurações > Limpar Armazenamento para liberar espaço.');
+                                                alert('Armazenamento cheio! NÃ£o foi possÃ­vel salvar o vÃ­deo. VÃ¡ em ConfiguraÃ§Ãµes > Limpar Armazenamento para liberar espaÃ§o.');
                                               }
                                             }
                                           }
@@ -3883,10 +4740,10 @@ function App() {
                                   }}
                                   className="w-full py-4 bg-white hover:bg-orange-50 text-orange-700 border border-orange-200 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
                                 >
-                                  <Video size={14} /> {settings.heroVideo ? 'Trocar Vídeo' : 'Enviar Vídeo Local'}
+                                  <Video size={14} /> {settings.heroVideo ? 'Trocar VÃ­deo' : 'Enviar VÃ­deo Local'}
                                 </button>
                                 {settings.heroVideo && (
-                                  <p className="text-[9px] text-green-600 font-bold uppercase tracking-widest">Vídeo Carregado com Sucesso</p>
+                                  <p className="text-[9px] text-green-600 font-bold uppercase tracking-widest">VÃ­deo Carregado com Sucesso</p>
                                 )}
                               </div>
                             </div>
@@ -3940,7 +4797,7 @@ function App() {
 
                           <div className="space-y-4">
                             <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                              <ImageIcon size={14} className="text-orange-700" /> Imagens "Sobre Nós"
+                              <ImageIcon size={14} className="text-orange-700" /> Imagens "Sobre NÃ³s"
                             </label>
                             <div className="flex flex-col gap-4 p-6 bg-stone-50/50 rounded-3xl border border-stone-100">
                               <div className="grid grid-cols-2 gap-4">
@@ -3976,7 +4833,7 @@ function App() {
                                   }}
                                     className="w-full py-3 bg-white hover:bg-orange-50 text-orange-700 border border-orange-200 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all"
                                 >
-                                  Img 1 {settings.aboutImage1 ? '✓' : '+'}
+                                  Img 1 {settings.aboutImage1 ? 'âœ“' : '+'}
                                 </button>
                                   {settings.aboutImage1 && (
                                     <>
@@ -4002,7 +4859,7 @@ function App() {
                                                 : 'bg-white text-stone-600 hover:bg-orange-50'
                                             }`}
                                           >
-                                            Média
+                                            MÃ©dia
                                           </button>
                                           <button
                                             onClick={() => setSettings({...settings, aboutImage1Size: 'large'})}
@@ -4072,7 +4929,7 @@ function App() {
                                   }}
                                     className="w-full py-3 bg-white hover:bg-orange-50 text-orange-700 border border-orange-200 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all"
                                 >
-                                  Img 2 {settings.aboutImage2 ? '✓' : '+'}
+                                  Img 2 {settings.aboutImage2 ? 'âœ“' : '+'}
                                 </button>
                                   {settings.aboutImage2 && (
                                     <>
@@ -4098,7 +4955,7 @@ function App() {
                                                 : 'bg-white text-stone-600 hover:bg-orange-50'
                                             }`}
                                           >
-                                            Média
+                                            MÃ©dia
                                           </button>
                                           <button
                                             onClick={() => setSettings({...settings, aboutImage2Size: 'large'})}
@@ -4152,6 +5009,166 @@ function App() {
                             className="w-full px-8 py-5 rounded-3xl border border-stone-100 focus:outline-none focus:ring-4 focus:ring-orange-700/5 focus:border-orange-700/20 bg-stone-50/50 font-black text-lg text-stone-900 transition-all"
                           />
                         </div>
+
+                        <div className="rounded-[2rem] border border-stone-100 bg-stone-50/50 p-6 sm:p-8 space-y-6">
+                          <div>
+                            <p className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Textos da loja</p>
+                            <h6 className="mt-2 text-lg font-black text-stone-900">Mensagens da home</h6>
+                            <p className="mt-2 text-sm text-stone-500">Edite os titulos, subtitulos e botoes que aparecem na pagina inicial.</p>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Faixa principal</label>
+                              <input
+                                value={storefrontText.heroBadge || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, heroBadge: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Botao principal</label>
+                              <input
+                                value={storefrontText.heroPrimaryButton || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, heroPrimaryButton: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Titulo principal</label>
+                            <textarea
+                              value={storefrontText.heroTitle || ''}
+                              onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, heroTitle: e.target.value } })}
+                              rows={3}
+                              className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900 resize-y"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Subtitulo principal</label>
+                            <textarea
+                              value={storefrontText.heroSubtitle || ''}
+                              onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, heroSubtitle: e.target.value } })}
+                              rows={3}
+                              className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-medium text-stone-900 resize-y"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Botao secundario</label>
+                              <input
+                                value={storefrontText.heroSecondaryButton || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, heroSecondaryButton: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Tooltip do WhatsApp</label>
+                              <input
+                                value={storefrontText.whatsappTooltip || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, whatsappTooltip: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Faixa do cardapio</label>
+                            <input
+                              value={storefrontText.menuBadge || ''}
+                              onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, menuBadge: e.target.value } })}
+                              className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Titulo da secao de cardapio</label>
+                            <input
+                              value={storefrontText.menuTitle || ''}
+                              onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, menuTitle: e.target.value } })}
+                              className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Faixa institucional</label>
+                              <input
+                                value={storefrontText.aboutBadge || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, aboutBadge: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Titulo da experiencia</label>
+                              <input
+                                value={storefrontText.experienceTitle || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, experienceTitle: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Titulo institucional</label>
+                            <textarea
+                              value={storefrontText.aboutTitle || ''}
+                              onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, aboutTitle: e.target.value } })}
+                              rows={3}
+                              className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900 resize-y"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Subtitulo institucional</label>
+                            <textarea
+                              value={storefrontText.aboutSubtitle || ''}
+                              onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, aboutSubtitle: e.target.value } })}
+                              rows={3}
+                              className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-medium text-stone-900 resize-y"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Subtitulo da experiencia</label>
+                            <textarea
+                              value={storefrontText.experienceSubtitle || ''}
+                              onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, experienceSubtitle: e.target.value } })}
+                              rows={3}
+                              className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-medium text-stone-900 resize-y"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Destaque 1</label>
+                              <input
+                                value={storefrontText.featureOne || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, featureOne: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Destaque 2</label>
+                              <input
+                                value={storefrontText.featureTwo || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, featureTwo: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Destaque 3</label>
+                              <input
+                                value={storefrontText.featureThree || ''}
+                                onChange={(e) => setSettings({ ...settings, storefrontText: { ...storefrontText, featureThree: e.target.value } })}
+                                className="w-full px-4 py-3 rounded-2xl border border-stone-200 bg-white font-bold text-stone-900"
+                              />
+                            </div>
+                          </div>
+                        </div>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                           <div className="space-y-4">
@@ -4173,7 +5190,7 @@ function App() {
                         </div>
 
                         <div className="space-y-4">
-                          <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">Endereço Completo</label>
+                          <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">Endereco Completo</label>
                           <input 
                             value={settings.address}
                             onChange={(e) => setSettings({...settings, address: e.target.value})}
@@ -4183,7 +5200,7 @@ function App() {
 
                         <div className="space-y-4">
                           <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                            <Clock size={14} className="text-orange-700" /> Horários de Funcionamento
+                            <Clock size={14} className="text-orange-700" /> Horarios de Funcionamento
                           </label>
                           <div className="space-y-3 p-6 bg-stone-50/50 rounded-3xl border border-stone-100">
                             {Object.entries(settings.openingHours || {}).map(([day, hours]) => (
@@ -4199,7 +5216,7 @@ function App() {
                                     updatedHours[day] = e.target.value;
                                     setSettings({ ...settings, openingHours: updatedHours });
                                   }}
-                                  placeholder="Ex: 11:00 às 22:00"
+                                  placeholder="Ex: 11:00 Ã s 22:00"
                                   className="flex-1 px-4 py-3 rounded-xl border border-stone-100 focus:outline-none focus:ring-2 focus:ring-orange-700/20 bg-white font-bold text-stone-900 text-sm"
                                 />
                               </div>
@@ -4224,7 +5241,7 @@ function App() {
                             </div>
                             <div className="p-8 bg-stone-50/50 rounded-[2rem] border border-stone-100 space-y-4">
                               <label className="flex items-center gap-3 text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">
-                                <ShoppingCart size={14} className="text-orange-700" /> Pedido Mínimo
+                                <ShoppingCart size={14} className="text-orange-700" /> Pedido MÃ­nimo
                               </label>
                               <div className="relative">
                                 <span className="absolute left-6 top-1/2 -translate-y-1/2 font-black text-stone-400">R$</span>
@@ -4243,7 +5260,7 @@ function App() {
                             <CreditCard size={14} className="text-orange-700" /> Meios de Pagamento
                           </label>
                           <div className="flex flex-wrap gap-3">
-                            {Array.from(new Set(['Dinheiro', 'PIX', 'Cartão de Débito', 'Cartão de Crédito', 'Vale Refeição', ...currentExperimentalPayments])).map(method => (
+                            {Array.from(new Set(['Dinheiro', 'PIX', 'CartÃ£o de DÃ©bito', 'CartÃ£o de CrÃ©dito', 'Vale RefeiÃ§Ã£o', ...currentExperimentalPayments])).map(method => (
                               <button 
                                 key={method}
                                 onClick={() => {
@@ -4265,22 +5282,87 @@ function App() {
                             ))}
                           </div>
                         </div>
+
+                        <div className="rounded-[2rem] border border-stone-100 bg-stone-50/50 p-6 sm:p-8">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-2">
+                              <p className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">
+                                Impressao de pedidos
+                              </p>
+                              <h6 className="text-lg font-black text-stone-900">
+                                Imprimir automaticamente novos pedidos
+                              </h6>
+                              <p className="text-sm font-medium leading-relaxed text-stone-500">
+                                Quando um novo pedido chegar neste computador com o painel logado, o site abre a impressao com 4 vias: cozinha, caixa, motoboy e cliente.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setSettings({
+                                ...settings,
+                                printing: {
+                                  ...settings.printing,
+                                  autoPrintNewOrders: !settings.printing?.autoPrintNewOrders,
+                                },
+                              })}
+                              className={`relative h-8 w-14 rounded-full transition-all ${
+                                settings.printing?.autoPrintNewOrders
+                                  ? 'bg-green-500 shadow-lg shadow-green-500/20'
+                                  : 'bg-stone-200'
+                              }`}
+                            >
+                              <div className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow-md transition-all ${
+                                settings.printing?.autoPrintNewOrders ? 'left-7' : 'left-1'
+                              }`} />
+                            </button>
+                          </div>
+                          <div className="mt-6 space-y-3">
+                            <p className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">
+                              Largura da impressora
+                            </p>
+                            <div className="flex flex-wrap gap-3">
+                              {[58, 80].map((width) => (
+                                <button
+                                  key={width}
+                                  type="button"
+                                  onClick={() => setSettings({
+                                    ...settings,
+                                    printing: {
+                                      ...settings.printing,
+                                      paperWidthMm: width as 58 | 80,
+                                    },
+                                  })}
+                                  className={`px-6 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all ${
+                                    (settings.printing?.paperWidthMm || 80) === width
+                                      ? 'bg-stone-900 text-white shadow-xl'
+                                      : 'bg-white text-stone-500 border border-stone-200 hover:bg-stone-100'
+                                  }`}
+                                >
+                                  Bobina {width}mm
+                                </button>
+                              ))}
+                            </div>
+                            <p className="text-xs font-medium text-stone-500">
+                              Use `58mm` para impressoras pequenas e `80mm` para cupons mais largos.
+                            </p>
+                          </div>
+                        </div>
                       </div>
 
                       <div className="pt-8 sm:pt-12 border-t border-stone-100 space-y-6 sm:space-y-8">
                         <div>
-                          <h5 className="text-lg sm:text-xl font-black text-stone-900 mb-4 uppercase tracking-widest text-xs">Sincronização de Dados</h5>
+                          <h5 className="text-lg sm:text-xl font-black text-stone-900 mb-4 uppercase tracking-widest text-xs">SincronizaÃ§Ã£o de Dados</h5>
                           <div className="space-y-3 sm:space-y-4">
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                               <button 
                                 onClick={async (e) => {
                                   const button = e.currentTarget;
                                   const originalText = button.textContent;
-                                  button.textContent = '⏳ Sincronizando...';
+                                  button.textContent = 'â³ Sincronizando...';
                                   button.disabled = true;
                                   const success = await syncToCloud();
                                   if (success) {
-                                    button.textContent = '✅ Sincronizado com Sucesso!';
+                                    button.textContent = 'âœ… Sincronizado com Sucesso!';
                                     button.className = button.className.replace('bg-green-50', 'bg-green-100').replace('text-green-600', 'text-green-700');
                                     setTimeout(() => {
                                       button.textContent = originalText;
@@ -4288,7 +5370,7 @@ function App() {
                                       button.disabled = false;
                                     }, 3000);
                                   } else {
-                                    button.textContent = '❌ Erro ao Sincronizar';
+                                    button.textContent = 'âŒ Erro ao Sincronizar';
                                     button.className = button.className.replace('bg-green-50', 'bg-red-50').replace('text-green-600', 'text-red-600');
                                     setTimeout(() => {
                                       button.textContent = originalText;
@@ -4299,23 +5381,23 @@ function App() {
                                 }}
                                 className="px-4 sm:px-8 py-3 sm:py-5 bg-green-50 text-green-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-green-100 transition-all active:scale-95 flex items-center justify-center gap-2 text-xs sm:text-sm border-2 border-green-200 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                <Save size={14} className="sm:w-4 sm:h-4" /> ☁️ Sincronizar com Nuvem (Salvar)
+                                <Save size={14} className="sm:w-4 sm:h-4" /> â˜ï¸ Sincronizar com Nuvem (Salvar)
                               </button>
                               <button 
                                 onClick={async () => {
-                                  const preserve = confirm('Deseja preservar as imagens locais ao carregar da nuvem?\n\nSim = Mantém suas imagens locais\nNão = Substitui tudo pelos dados da nuvem');
+                                  const preserve = confirm('Deseja preservar as imagens locais ao carregar da nuvem?\n\nSim = MantÃ©m suas imagens locais\nNÃ£o = Substitui tudo pelos dados da nuvem');
                                   alert('Carregando dados da nuvem...');
                                   const success = await loadFromCloud(preserve);
                                   if (success) {
-                                    alert(`✅ Dados carregados da nuvem com sucesso!\n\n${preserve ? 'Imagens locais foram preservadas.' : 'Todos os dados foram substituídos.'}\n\nA página será recarregada.`);
+                                    alert(`âœ… Dados carregados da nuvem com sucesso!\n\n${preserve ? 'Imagens locais foram preservadas.' : 'Todos os dados foram substituÃ­dos.'}\n\nA pÃ¡gina serÃ¡ recarregada.`);
                                     setTimeout(() => window.location.reload(), 1000);
                                   } else {
-                                    alert('❌ Nenhum dado encontrado na nuvem ou erro ao carregar.');
+                                    alert('âŒ Nenhum dado encontrado na nuvem ou erro ao carregar.');
                                   }
                                 }}
                                 className="px-4 sm:px-8 py-3 sm:py-5 bg-blue-50 text-blue-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-blue-100 transition-all active:scale-95 flex items-center justify-center gap-2 text-xs sm:text-sm border-2 border-blue-200"
                               >
-                                <Save size={14} className="sm:w-4 sm:h-4" /> ⬇️ Carregar da Nuvem (Baixar)
+                                <Save size={14} className="sm:w-4 sm:h-4" /> â¬‡ï¸ Carregar da Nuvem (Baixar)
                               </button>
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
@@ -4336,43 +5418,43 @@ function App() {
                             <button 
                               onClick={restoreFromBackup}
                               className="w-full px-4 sm:px-8 py-3 sm:py-5 bg-blue-50 text-blue-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-blue-100 transition-all active:scale-95 flex items-center justify-center gap-2 text-xs sm:text-sm border-2 border-blue-200"
-                              title="Restaura o último backup automático salvo no navegador"
+                              title="Restaura o Ãºltimo backup automÃ¡tico salvo no navegador"
                             >
-                              <RefreshCw size={14} className="sm:w-4 sm:h-4" /> 🔄 Restaurar Backup Automático
+                              <RefreshCw size={14} className="sm:w-4 sm:h-4" /> ðŸ”„ Restaurar Backup AutomÃ¡tico
                             </button>
                             <button 
                               onClick={exportDataWithImages}
                               className="w-full px-4 sm:px-8 py-3 sm:py-5 bg-green-50 text-green-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-green-100 transition-all active:scale-95 flex items-center justify-center gap-2 text-xs sm:text-sm border-2 border-green-200"
                             >
-                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> 📸 Copiar Completo (COM Imagens)
+                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> ðŸ“¸ Copiar Completo (COM Imagens)
                             </button>
                             <button 
                               onClick={exportDataForSync}
                               className="w-full px-4 sm:px-8 py-3 sm:py-5 bg-orange-50 text-orange-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-orange-100 transition-all active:scale-95 flex items-center justify-center gap-2 text-xs sm:text-sm border-2 border-orange-200"
                             >
-                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> 📱 Copiar para Celular (Sem Imagens)
+                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> ðŸ“± Copiar para Celular (Sem Imagens)
                             </button>
                             <button 
                               onClick={importFromPaste}
                               className="w-full px-4 sm:px-8 py-3 sm:py-5 bg-blue-50 text-blue-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-blue-100 transition-all active:scale-95 flex items-center justify-center gap-2 text-xs sm:text-sm"
                             >
-                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> Colar JSON (Texto Único)
+                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> Colar JSON (Texto Ãšnico)
                             </button>
                             <button 
                               onClick={importFromChunks}
                               className="w-full px-4 sm:px-8 py-3 sm:py-5 bg-indigo-50 text-indigo-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-indigo-100 transition-all active:scale-95 flex items-center justify-center gap-2 text-xs sm:text-sm border-2 border-indigo-200"
                             >
-                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> 📱 Colar JSON em Partes (WhatsApp)
+                              <MessageCircle size={14} className="sm:w-4 sm:h-4" /> ðŸ“± Colar JSON em Partes (WhatsApp)
                             </button>
                             <p className="text-[10px] sm:text-xs text-stone-400 text-center px-2">
-                              💡 <strong>Para sincronizar imagens:</strong> Use "Copiar Completo (COM Imagens)" no PC, depois "Colar JSON" no celular. Para WhatsApp (sem imagens), use "Copiar para Celular (Sem Imagens)" que divide automaticamente.
+                              ðŸ’¡ <strong>Para sincronizar imagens:</strong> Use "Copiar Completo (COM Imagens)" no PC, depois "Colar JSON" no celular. Para WhatsApp (sem imagens), use "Copiar para Celular (Sem Imagens)" que divide automaticamente.
                             </p>
                           </div>
                         </div>
 
                         <div>
                           <h5 className="text-lg sm:text-xl font-black text-stone-900 mb-4 uppercase tracking-widest text-xs flex items-center gap-2">
-                            <Building2 size={18} className="text-orange-700" /> Informações Bancárias
+                            <Building2 size={18} className="text-orange-700" /> InformaÃ§Ãµes BancÃ¡rias
                           </h5>
                           <div className="space-y-4 p-6 bg-stone-50/50 rounded-2xl border border-stone-100">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4390,7 +5472,7 @@ function App() {
                                 />
                               </div>
                               <div>
-                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em] mb-2 block">Código do Banco</label>
+                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em] mb-2 block">CÃ³digo do Banco</label>
                                 <input
                                   type="text"
                                   value={settings.bankInfo?.bankCode || ''}
@@ -4403,7 +5485,7 @@ function App() {
                                 />
                               </div>
                               <div>
-                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em] mb-2 block">Agência</label>
+                                <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em] mb-2 block">AgÃªncia</label>
                                 <input
                                   type="text"
                                   value={settings.bankInfo?.agency || ''}
@@ -4439,7 +5521,7 @@ function App() {
                                   className="w-full px-4 py-3 bg-white border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:ring-2 focus:ring-orange-700 focus:border-orange-700"
                                 >
                                   <option value="checking">Conta Corrente</option>
-                                  <option value="savings">Conta Poupança</option>
+                                  <option value="savings">Conta PoupanÃ§a</option>
                                 </select>
                               </div>
                               <div>
@@ -4495,7 +5577,7 @@ function App() {
                                   <option value="cnpj">CNPJ</option>
                                   <option value="email">E-mail</option>
                                   <option value="phone">Telefone</option>
-                                  <option value="random">Chave Aleatória</option>
+                                  <option value="random">Chave AleatÃ³ria</option>
                                 </select>
                               </div>
                             </div>
@@ -4629,7 +5711,7 @@ function App() {
                                           });
                                         }}
                                         className="flex-1 px-4 py-3 bg-white border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:ring-2 focus:ring-orange-700 focus:border-orange-700"
-                                        placeholder="Nome do serviço"
+                                        placeholder="Nome do serviÃ§o"
                                       />
                                       <input
                                         type="password"
@@ -4681,7 +5763,7 @@ function App() {
                         </div>
 
                         <div>
-                          <h5 className="text-lg sm:text-xl font-black text-stone-900 mb-4 uppercase tracking-widest text-xs">Manutenção</h5>
+                          <h5 className="text-lg sm:text-xl font-black text-stone-900 mb-4 uppercase tracking-widest text-xs">ManutenÃ§Ã£o</h5>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                         <button 
                           onClick={() => {
@@ -4735,38 +5817,38 @@ function App() {
                                       try {
                                         const parsed = JSON.parse(value);
                                         if (Array.isArray(parsed)) {
-                                          ourDataStatus.push(`✅ ${key}: ${parsed.length} item(s)`);
+                                          ourDataStatus.push(`âœ… ${key}: ${parsed.length} item(s)`);
                                         } else if (parsed && typeof parsed === 'object') {
                                           if (key === tenantStorageKeys.settings) {
-                                            ourDataStatus.push(`✅ ${key}: ${parsed.name || 'Sem nome'}`);
+                                            ourDataStatus.push(`âœ… ${key}: ${parsed.name || 'Sem nome'}`);
                                           } else {
-                                            ourDataStatus.push(`✅ ${key}: Existe`);
+                                            ourDataStatus.push(`âœ… ${key}: Existe`);
                                           }
                                         }
                                       } catch {
-                                        ourDataStatus.push(`⚠️ ${key}: Inválido`);
+                                        ourDataStatus.push(`âš ï¸ ${key}: InvÃ¡lido`);
                                       }
                                     } else {
-                                      ourDataStatus.push(`❌ ${key}: Não existe`);
+                                      ourDataStatus.push(`âŒ ${key}: NÃ£o existe`);
                                     }
                                   });
                                   
                                   // Build debug message
-                                  let debugMessage = `🔍 DEBUG: Estado do localStorage\n\n`;
-                                  debugMessage += `📊 Tamanho Total: ${totalSizeMB} MB (${totalSizeKB} KB)\n\n`;
-                                  debugMessage += `📦 Nossos Dados:\n${ourDataStatus.join('\n')}\n\n`;
-                                  debugMessage += `📋 Todas as Chaves (${storageInfo.length}):\n`;
+                                  let debugMessage = `ðŸ” DEBUG: Estado do localStorage\n\n`;
+                                  debugMessage += `ðŸ“Š Tamanho Total: ${totalSizeMB} MB (${totalSizeKB} KB)\n\n`;
+                                  debugMessage += `ðŸ“¦ Nossos Dados:\n${ourDataStatus.join('\n')}\n\n`;
+                                  debugMessage += `ðŸ“‹ Todas as Chaves (${storageInfo.length}):\n`;
                                   
                                   storageInfo
                                     .sort((a, b) => b.size - a.size)
                                     .forEach(info => {
                                       const itemInfo = info.items !== undefined ? ` (${info.items} itens)` : '';
-                                      debugMessage += `  • ${info.key}: ${info.sizeKB} KB${itemInfo}\n`;
+                                      debugMessage += `  â€¢ ${info.key}: ${info.sizeKB} KB${itemInfo}\n`;
                                     });
                                   
-                                  debugMessage += `\n🌐 Ambiente: ${window.location.hostname}\n`;
-                                  debugMessage += `📱 Viewport: ${window.innerWidth}x${window.innerHeight}px\n`;
-                                  debugMessage += `💾 Quota Disponível: ~${((5 * 1024 * 1024 - totalSize) / (1024 * 1024)).toFixed(2)} MB (estimado)`;
+                                  debugMessage += `\nðŸŒ Ambiente: ${window.location.hostname}\n`;
+                                  debugMessage += `ðŸ“± Viewport: ${window.innerWidth}x${window.innerHeight}px\n`;
+                                  debugMessage += `ðŸ’¾ Quota DisponÃ­vel: ~${((5 * 1024 * 1024 - totalSize) / (1024 * 1024)).toFixed(2)} MB (estimado)`;
                                   
                                   // Show in alert (may be truncated if too long)
                                   if (debugMessage.length > 2000) {
@@ -4784,11 +5866,11 @@ function App() {
                               }}
                               className="px-4 sm:px-8 py-3 sm:py-5 bg-purple-50 text-purple-600 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-purple-100 transition-all active:scale-95 text-xs sm:text-sm"
                             >
-                              🔍 Debug localStorage
+                              ðŸ” Debug localStorage
                         </button>
                         <button 
                           onClick={() => {
-                                if (confirm('Isso limpará pedidos antigos e imagens grandes para liberar espaço, mas manterá suas configurações. Continuar?')) {
+                                if (confirm('Isso limparÃ¡ pedidos antigos e imagens grandes para liberar espaÃ§o, mas manterÃ¡ suas configuraÃ§Ãµes. Continuar?')) {
                                   try {
                                     // Keep only last 5 orders
                                     const recentOrders = orders.slice(0, 5);
@@ -4820,12 +5902,24 @@ function App() {
                             </button>
                             <button 
                               onClick={() => {
-                                if (confirm('Isso apagará TODAS as suas personalizações e voltará aos dados padrão. Continuar?')) {
-                              [tenantStorageKeys.settings, tenantStorageKeys.categories, tenantStorageKeys.items, tenantStorageKeys.orders, tenantStorageKeys.lastSync, tenantStorageKeys.backup]
-                                .forEach((key) => localStorage.removeItem(key));
-                              window.location.reload();
-                            }
-                          }}
+                                if (confirm('Isso apagarÃ¡ TODAS as suas personalizaÃ§Ãµes e voltarÃ¡ aos dados padrÃ£o. Continuar?')) {
+                                  [
+                                    tenantStorageKeys.settings,
+                                    tenantStorageKeys.categories,
+                                    tenantStorageKeys.items,
+                                    tenantStorageKeys.orders,
+                                    tenantStorageKeys.lastSync,
+                                    tenantStorageKeys.backup,
+                                    ...tenantStorageLegacyKeys.settings,
+                                    ...tenantStorageLegacyKeys.categories,
+                                    ...tenantStorageLegacyKeys.items,
+                                    ...tenantStorageLegacyKeys.orders,
+                                    ...tenantStorageLegacyKeys.lastSync,
+                                    ...tenantStorageLegacyKeys.backup,
+                                  ].forEach((key) => localStorage.removeItem(key));
+                                  window.location.reload();
+                                }
+                              }}
                               className="px-4 sm:px-8 py-3 sm:py-5 bg-red-50 text-red-500 font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] hover:bg-red-100 transition-all active:scale-95 text-xs sm:text-sm"
                         >
                               Resetar Tudo
@@ -4839,11 +5933,11 @@ function App() {
                               localStorage.setItem(tenantStorageKeys.settings, JSON.stringify(settings));
                               localStorage.setItem(tenantStorageKeys.categories, JSON.stringify(categories));
                               localStorage.setItem(tenantStorageKeys.items, JSON.stringify(items));
-                              alert('Todas as alterações foram salvas com sucesso!');
+                              alert('Todas as alteraÃ§Ãµes foram salvas com sucesso!');
                             }}
                             className="w-full px-6 sm:px-12 py-4 sm:py-6 bg-green-600 hover:bg-green-700 text-white font-black uppercase tracking-widest rounded-xl sm:rounded-[1.5rem] shadow-2xl shadow-green-600/30 transition-all active:scale-95 flex items-center justify-center gap-3 sm:gap-4 text-sm sm:text-base"
                           >
-                            <Save size={18} className="sm:w-5 sm:h-5" /> Salvar Todas as Alterações
+                            <Save size={18} className="sm:w-5 sm:h-5" /> Salvar Todas as AlteraÃ§Ãµes
                           </button>
                         </div>
                       </div>
@@ -4896,7 +5990,7 @@ function App() {
                       <ShoppingCart size={48} strokeWidth={1} />
                     </div>
                     <p className="text-stone-400 font-black uppercase tracking-[0.2em] text-sm mb-6">Carrinho Vazio</p>
-                    <button onClick={() => setIsCartOpen(false)} className="text-orange-700 font-black uppercase text-xs tracking-widest hover:underline decoration-2 underline-offset-8">Voltar ao Cardápio</button>
+                    <button onClick={() => setIsCartOpen(false)} className="text-orange-700 font-black uppercase text-xs tracking-widest hover:underline decoration-2 underline-offset-8">Voltar ao Cardapio</button>
                   </div>
                 ) : (
                   cart.map(({ item, quantity }) => (
@@ -4949,15 +6043,20 @@ function App() {
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                       <div className="space-y-3">
                         <input placeholder="Nome Completo" value={customerName} onChange={e => setCustomerName(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
-                        <input placeholder="E-mail (obrigatório para cartão)" type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
+                        <input placeholder="E-mail (obrigatorio para cartao)" type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
                         <input placeholder="WhatsApp" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
-                        <textarea placeholder="Endereço Completo" value={deliveryAddress} onChange={e => setDeliveryAddress(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold h-24 resize-none" />
+                        <textarea placeholder="Endereco Completo" value={deliveryAddress} onChange={e => setDeliveryAddress(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold h-24 resize-none" />
+                        <input placeholder="Ponto de referencia (opcional)" value={deliveryReference} onChange={e => setDeliveryReference(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
+                        <textarea placeholder="Observacoes do pedido (opcional)" value={orderNotes} onChange={e => setOrderNotes(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold h-24 resize-none" />
                         <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-black uppercase text-xs tracking-widest">
                           {checkoutPaymentMethods.map(m => <option key={m} value={m}>{m}</option>)}
                         </select>
+                        {paymentMethod === 'Dinheiro' && (
+                          <input placeholder="Troco para quanto? (opcional)" value={changeForInput} onChange={e => setChangeForInput(e.target.value)} className="w-full px-6 py-4 rounded-2xl border border-stone-100 focus:ring-4 focus:ring-orange-700/5 bg-white font-bold" />
+                        )}
                         {isLabTenant && currentExperimentalPayments.length > 0 && (
                           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] font-bold leading-relaxed text-amber-800">
-                            Ambiente de homologação: os meios marcados como teste servem para validar UX e integrações futuras sem impactar o checkout principal.
+                            Ambiente de homologacao: os meios marcados como teste servem para validar UX e integracoes futuras sem impactar o checkout principal.
                           </div>
                         )}
                       </div>
@@ -4966,7 +6065,7 @@ function App() {
                         <button 
                           onClick={() => {
                             if (!validateCheckoutFields()) {
-                              alert('Por favor, preencha todos os campos obrigatórios.');
+                              alert('Por favor, preencha todos os campos obrigatorios.');
                               return;
                             }
                             setIsPaymentReviewOpen(true);
@@ -4981,11 +6080,11 @@ function App() {
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                       <div className="bg-blue-50 rounded-[2rem] p-6 border-2 border-blue-200">
                         <h4 className="font-black text-blue-900 mb-4 uppercase tracking-widest text-xs flex items-center gap-2">
-                          <CreditCard size={18} /> Revisão do Pagamento
+                          <CreditCard size={18} /> Revisao do Pagamento
                         </h4>
                         <div className="space-y-3 text-sm">
                           <div className="flex justify-between">
-                            <span className="text-stone-600 font-bold">Método de Pagamento:</span>
+                            <span className="text-stone-600 font-bold">Metodo de Pagamento:</span>
                             <span className="text-stone-900 font-black">{paymentMethod}</span>
                           </div>
                           <div className="flex justify-between">
@@ -5006,9 +6105,15 @@ function App() {
                         <h4 className="font-black text-stone-900 mb-3 uppercase tracking-widest text-xs">Dados de Entrega</h4>
                         <div className="space-y-2 text-sm">
                           <p className="text-stone-700 font-bold"><span className="text-stone-500">Nome:</span> {customerName}</p>
-                          <p className="text-stone-700 font-bold"><span className="text-stone-500">E-mail:</span> {customerEmail || 'Não informado'}</p>
+                          <p className="text-stone-700 font-bold"><span className="text-stone-500">E-mail:</span> {customerEmail || 'Nao informado'}</p>
                           <p className="text-stone-700 font-bold"><span className="text-stone-500">WhatsApp:</span> {customerPhone}</p>
-                          <p className="text-stone-700 font-bold"><span className="text-stone-500">Endereço:</span> {deliveryAddress}</p>
+                          <p className="text-stone-700 font-bold"><span className="text-stone-500">Endereco:</span> {deliveryAddress}</p>
+                          <p className="text-stone-700 font-bold"><span className="text-stone-500">Referencia:</span> {deliveryReference || 'Nao informada'}</p>
+                          <p className="text-stone-700 font-bold"><span className="text-stone-500">Observacoes:</span> {orderNotes || 'Nenhuma'}</p>
+                          <p className="text-stone-700 font-bold"><span className="text-stone-500">Forma de pagamento:</span> {paymentMethod}</p>
+                          {paymentMethod === 'Dinheiro' && (
+                            <p className="text-stone-700 font-bold"><span className="text-stone-500">Troco para:</span> {changeForInput || 'Nao precisa de troco'}</p>
+                          )}
                         </div>
                       </div>
                       <div className="flex gap-4">
@@ -5020,7 +6125,7 @@ function App() {
                           {paymentMethod === 'PIX'
                             ? 'Gerar Chave PIX'
                             : isCardPaymentMethod(paymentMethod)
-                              ? 'Pagar com Cartão'
+                              ? 'Pagar com Cartao'
                               : 'Confirmar e Enviar Pedido'}
                         </button>
                       </div>
@@ -5055,7 +6160,7 @@ function App() {
                 <p className="text-emerald-600 font-black uppercase tracking-[0.25em] text-[11px] mb-2">Pagamento via PIX</p>
                 <h3 className="text-3xl font-black tracking-tighter text-stone-900">Copie a chave e conclua o pagamento</h3>
                 <p className="mt-3 text-stone-600 font-bold leading-relaxed">
-                  Assim que você confirmar o pagamento, o pedido entra em produção imediatamente e o prazo estimado é de até 50 minutos.
+                  Assim que vocÃª confirmar o pagamento, o pedido entra em produÃ§Ã£o imediatamente e o prazo estimado Ã© de atÃ© 50 minutos.
                 </p>
               </div>
 
@@ -5090,7 +6195,7 @@ function App() {
                     onClick={() => void confirmPixPayment()}
                     className="flex-[1.5] bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-[1.5rem] uppercase text-[10px] tracking-widest shadow-xl transition-all"
                   >
-                    Já fiz o pagamento
+                    Ja fiz o pagamento
                   </button>
                 </div>
               </div>
@@ -5122,10 +6227,10 @@ function App() {
               className="relative flex h-[calc(100vh-1rem)] max-h-[920px] w-full max-w-3xl flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl sm:h-auto sm:max-h-[90vh]"
             >
               <div className="shrink-0 bg-gradient-to-br from-blue-50 to-stone-50 px-6 py-8 sm:px-8">
-                <p className="text-blue-600 font-black uppercase tracking-[0.25em] text-[11px] mb-2">Pagamento no cartão</p>
+                <p className="text-blue-600 font-black uppercase tracking-[0.25em] text-[11px] mb-2">Pagamento no cartÃ£o</p>
                 <h3 className="text-3xl font-black tracking-tighter text-stone-900">Finalize com Mercado Pago</h3>
                 <p className="mt-3 text-stone-600 font-bold leading-relaxed">
-                  Assim que o pagamento for aprovado, o restaurante recebe a confirmação e seu pedido entra em produção.
+                  Assim que o pagamento for aprovado, o restaurante recebe a confirmaÃ§Ã£o e seu pedido entra em produÃ§Ã£o.
                 </p>
               </div>
 
@@ -5139,7 +6244,7 @@ function App() {
 
                 {!isCardBrickReady && !cardPaymentError && (
                   <div className="rounded-[1.5rem] bg-blue-50 border border-blue-100 px-5 py-4 text-blue-700 font-bold text-sm">
-                    Carregando o formulário seguro do Mercado Pago...
+                    Carregando o formulÃ¡rio seguro do Mercado Pago...
                   </div>
                 )}
 
@@ -5197,23 +6302,23 @@ function App() {
                 <p className="mb-2 text-[11px] font-black uppercase tracking-[0.25em] text-amber-700">Checkout Experimental</p>
                 <h3 className="text-3xl font-black tracking-tighter text-stone-900">{selectedExperimentalPayment}</h3>
                 <p className="mt-3 text-stone-600 font-bold leading-relaxed">
-                  Este ambiente foi separado para validar experiência, viabilidade técnica e escolha do gateway antes de levar o recurso para o site principal.
+                  Este ambiente foi separado para validar experiÃªncia, viabilidade tÃ©cnica e escolha do gateway antes de levar o recurso para o site principal.
                 </p>
               </div>
 
               <div className="space-y-5 p-6 sm:p-8">
                 <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5 text-sm font-bold leading-relaxed text-amber-900">
                   {isStripeWalletPaymentMethod(selectedExperimentalPayment)
-                    ? 'Este fluxo usa Stripe Checkout como laboratório para exibir Apple Pay ou Google Pay em dispositivos compatíveis. A carteira disponível depende do aparelho, navegador e configuração do domínio.'
-                    : 'Aqui a gente valida o fluxo visual e operacional. A implementação real pode seguir por carteira digital na web ou por app próprio com suporte nativo.'}
+                    ? 'Este fluxo usa Stripe Checkout como laboratÃ³rio para exibir Apple Pay ou Google Pay em dispositivos compatÃ­veis. A carteira disponÃ­vel depende do aparelho, navegador e configuraÃ§Ã£o do domÃ­nio.'
+                    : 'Aqui a gente valida o fluxo visual e operacional. A implementaÃ§Ã£o real pode seguir por carteira digital na web ou por app prÃ³prio com suporte nativo.'}
                 </div>
 
                 <div className="rounded-[2rem] border border-stone-100 bg-stone-50 p-5">
-                  <h4 className="mb-3 text-xs font-black uppercase tracking-[0.25em] text-stone-500">Próximos passos desse laboratório</h4>
+                  <h4 className="mb-3 text-xs font-black uppercase tracking-[0.25em] text-stone-500">PrÃ³ximos passos desse laboratÃ³rio</h4>
                   <div className="space-y-2 text-sm font-bold text-stone-700">
                     <p>1. Confirmar se o gateway escolhido suporta {selectedExperimentalPayment}.</p>
                     <p>2. Validar UX mobile sem afetar o checkout oficial.</p>
-                    <p>3. Medir se vale seguir por web wallet ou por app próprio.</p>
+                    <p>3. Medir se vale seguir por web wallet ou por app prÃ³prio.</p>
                   </div>
                 </div>
 
@@ -5315,7 +6420,7 @@ function App() {
 
                 <div className="bg-blue-50 rounded-[2rem] p-6 border border-blue-100">
                   <h4 className="font-black text-blue-900 mb-4 uppercase tracking-widest text-xs flex items-center gap-2">
-                    <MessageCircle size={16} /> Informações do Cliente
+                    <MessageCircle size={16} /> InformaÃ§Ãµes do Cliente
                   </h4>
                   <div className="space-y-2 text-sm">
                     <p className="font-bold text-stone-800"><span className="text-stone-500">Nome:</span> {orderConfirmation.customerName}</p>
@@ -5323,15 +6428,15 @@ function App() {
                       <p className="font-bold text-stone-800"><span className="text-stone-500">E-mail:</span> {orderConfirmation.customerEmail}</p>
                     )}
                     <p className="font-bold text-stone-800"><span className="text-stone-500">WhatsApp:</span> {orderConfirmation.customerPhone}</p>
-                    <p className="font-bold text-stone-800"><span className="text-stone-500">Endereço:</span> {orderConfirmation.address}</p>
+                    <p className="font-bold text-stone-800"><span className="text-stone-500">Endereco:</span> {orderConfirmation.address}</p>
                     <p className="font-bold text-stone-800"><span className="text-stone-500">Pagamento:</span> {orderConfirmation.paymentMethod}</p>
                   </div>
                 </div>
 
                 <div className="bg-green-50 rounded-[2rem] p-6 border border-green-100">
                   <p className="text-green-800 font-bold text-sm leading-relaxed">
-                    ✓ Seu pedido foi enviado para o WhatsApp do restaurante. 
-                    Em breve você receberá a confirmação e o tempo estimado de entrega.
+                    âœ“ Seu pedido foi enviado para o WhatsApp do restaurante. 
+                    Em breve voce recebera a confirmacao e o tempo estimado de entrega.
                   </p>
                 </div>
 
@@ -5350,7 +6455,7 @@ function App() {
                     }}
                     className="flex-1 bg-orange-700 hover:bg-orange-800 text-white font-black py-5 rounded-[1.5rem] uppercase text-xs tracking-widest shadow-xl transition-all"
                   >
-                    Ver Cardápio
+                    Ver Cardapio
                   </button>
                 </div>
                 </div>
@@ -5389,7 +6494,7 @@ function App() {
                   <div className="min-w-0">
                     <h3 className="text-2xl font-black tracking-tighter text-stone-900 sm:text-4xl">{editingItemId ? 'Editar Item' : 'Novo Item'}</h3>
                     <p className="text-stone-400 font-bold uppercase text-[10px] tracking-widest mt-1">
-                      {editingItemId ? 'Atualize o produto completo' : 'Adicionar ao Cardápio'}
+                      {editingItemId ? 'Atualize o produto completo' : 'Adicionar ao Cardapio'}
                     </p>
                   </div>
                 </div>
@@ -5418,7 +6523,7 @@ function App() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-4">
-                    <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">Preço (R$)</label>
+                    <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">PreÃ§o (R$)</label>
                     <input 
                       type="number"
                       step="0.01"
@@ -5444,7 +6549,7 @@ function App() {
                 </div>
 
                 <div className="space-y-4">
-                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">Descrição</label>
+                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-[0.3em]">DescriÃ§Ã£o</label>
                   <textarea 
                     value={newItemForm.description}
                     onChange={(e) => setNewItemForm({...newItemForm, description: e.target.value})}
@@ -5515,7 +6620,7 @@ function App() {
                   <div className="flex items-center justify-between rounded-[2rem] border border-stone-100 bg-stone-50/50 px-6 py-5">
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.3em] text-stone-400">Disponibilidade</p>
-                      <p className="mt-2 text-sm font-bold text-stone-600">Controle se o item aparece como disponível no cardápio.</p>
+                      <p className="mt-2 text-sm font-bold text-stone-600">Controle se o item aparece como disponÃ­vel no cardÃ¡pio.</p>
                     </div>
                     <button
                       onClick={() => {
@@ -5548,7 +6653,7 @@ function App() {
                   <button 
                     onClick={() => {
                       if (!newItemForm.name || !newItemForm.price || !newItemForm.category) {
-                        alert('Por favor, preencha todos os campos obrigatórios!');
+                        alert('Por favor, preencha todos os campos obrigatÃ³rios!');
                         return;
                       }
                       const parsedPrice = parseFloat(newItemForm.price.replace(',', '.')) || 0;
@@ -5586,7 +6691,7 @@ function App() {
                     }}
                     className="flex-[2] bg-green-600 hover:bg-green-700 text-white font-black py-5 rounded-[1.5rem] shadow-xl uppercase text-xs tracking-widest transition-all"
                   >
-                    {editingItemId ? 'Salvar Alterações' : 'Adicionar Item'}
+                    {editingItemId ? 'Salvar AlteraÃ§Ãµes' : 'Adicionar Item'}
                   </button>
                 </div>
               </div>
@@ -5599,3 +6704,8 @@ function App() {
 }
 
 export default App;
+
+
+
+
+

@@ -62,7 +62,48 @@ Exemplo para o tenant `fogao-a-lenha`:
 - `npm run lint`: analise estativa.
 - `npm run test:run`: execucao unica dos testes.
 - `npm run build`: build de producao.
+- `npm run build:android`: gera a build web e sincroniza com o projeto Android.
+- `npm run cap:sync`: sincroniza assets/configuracoes com as plataformas nativas.
+- `npm run cap:android`: abre o projeto Android no Android Studio.
 - `npm run preview`: preview da build.
+
+## App Android Granatto
+
+O projeto agora tambem esta preparado como app Android com Capacitor.
+
+Arquivos principais:
+
+- `capacitor.config.ts`
+- `android/`
+- `public/manifest.webmanifest`
+- `public/sw.js`
+
+Fluxo recomendado:
+
+1. Rode `npm run build:android`
+2. Rode `npm run cap:android`
+3. No Android Studio, gere o `APK` ou `AAB`
+
+Gerar APK de teste via terminal:
+
+1. No Windows, garanta um `JAVA_HOME` valido antes da build
+2. Rode no diretorio `android/`: `.\gradlew.bat assembleDebug`
+3. O APK de teste sera gerado em `android/app/build/outputs/apk/debug/app-debug.apk`
+
+Identidade atual do app:
+
+- Nome: `Granatto`
+- App ID: `br.com.saborcaseiro.app`
+- Versao atual: `1.0.0`
+
+Guia de publicacao Android:
+
+- [docs/PUBLICACAO_PLAY_STORE.md](/C:/Dev/minas/docs/PUBLICACAO_PLAY_STORE.md:1)
+- [docs/PLAY_STORE_ASSETS.md](/C:/Dev/minas/docs/PLAY_STORE_ASSETS.md:1)
+- [docs/POLITICA_PRIVACIDADE_SABOR_CASEIRO.md](/C:/Dev/minas/docs/POLITICA_PRIVACIDADE_SABOR_CASEIRO.md:1)
+- [docs/ROTEIRO_CAPTURAS_PLAY_STORE.md](/C:/Dev/minas/docs/ROTEIRO_CAPTURAS_PLAY_STORE.md:1)
+- [docs/ENVIO_FINAL_PLAY_STORE.md](/C:/Dev/minas/docs/ENVIO_FINAL_PLAY_STORE.md:1)
+- Pagina publica: `/politica-privacidade.html`
 
 ## Pipeline CI
 

@@ -35,6 +35,33 @@ export interface PaymentTokens {
   otherTokens?: { name: string; token: string }[];
 }
 
+export interface PrintingSettings {
+  autoPrintNewOrders?: boolean;
+  paperWidthMm?: 58 | 80;
+}
+
+export interface StorefrontTextSettings {
+  heroBadge?: string;
+  heroTitle?: string;
+  heroSubtitle?: string;
+  heroPrimaryButton?: string;
+  heroSecondaryButton?: string;
+  showcaseBadge?: string;
+  showcaseTitle?: string;
+  showcaseSubtitle?: string;
+  menuBadge?: string;
+  menuTitle?: string;
+  aboutBadge?: string;
+  aboutTitle?: string;
+  aboutSubtitle?: string;
+  experienceTitle?: string;
+  experienceSubtitle?: string;
+  featureOne?: string;
+  featureTwo?: string;
+  featureThree?: string;
+  whatsappTooltip?: string;
+}
+
 export interface RestaurantSettings {
   name: string;
   logo?: string;
@@ -59,6 +86,8 @@ export interface RestaurantSettings {
   paymentMethods: string[];
   bankInfo?: BankInfo;
   paymentTokens?: PaymentTokens;
+  printing?: PrintingSettings;
+  storefrontText?: StorefrontTextSettings;
 }
 
 export interface Order {
@@ -67,6 +96,9 @@ export interface Order {
   customerEmail?: string;
   customerPhone: string;
   address: string;
+  reference?: string;
+  notes?: string;
+  changeFor?: number;
   items: { item: MenuItem; quantity: number }[];
   total: number;
   status: 'pending' | 'preparing' | 'delivered' | 'cancelled';

@@ -1,5 +1,7 @@
 import { promises as fs } from 'node:fs';
-import { buildTenantEnvKey, resolveTenantId } from '../lib/tenancy.js';
+import { get, put } from '@vercel/blob';
+import type { BlobAccessType } from '@vercel/blob';
+import { buildTenantEnvKey, getTenantAliasIds, resolveTenantId } from '../lib/tenancy.js';
 
 type PersistedData = {
   categories?: unknown[];
@@ -29,6 +31,9 @@ type ApiResponse = {
 };
 
 const DATA_DIRECTORY_PATH = '/tmp/minas-data';
+const BLOB_DATA_PREFIX = 'tenant-data';
+const PRIVATE_BLOB_ACCESS_MODE: BlobAccessType = 'private';
+const PUBLIC_BLOB_ACCESS_MODE: BlobAccessType = 'public';
 
 const parseAllowedOrigins = (rawValue: string | undefined) => {
   if (!rawValue) return ['*'];
@@ -87,19 +92,93 @@ const resolveAllowedOrigin = (req: ApiRequest, tenantId: string) => {
 };
 
 const getDataFilePath = (tenantId: string) => `${DATA_DIRECTORY_PATH}/${tenantId}.json`;
+const getBlobPath = (tenantId: string) => `${BLOB_DATA_PREFIX}/${tenantId}.json`;
+const hasBlobStorage = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
+const isVercelRuntime = () => process.env.VERCEL === '1' || Boolean(process.env.VERCEL_URL);
+const getPreferredBlobAccessMode = (): BlobAccessType =>
+  (process.env.BLOB_ACCESS_MODE?.trim().toLowerCase() === PRIVATE_BLOB_ACCESS_MODE
+    ? PRIVATE_BLOB_ACCESS_MODE
+    : PUBLIC_BLOB_ACCESS_MODE);
+
+const getStorageStatus = () => ({
+  backend: hasBlobStorage() ? 'vercel-blob' : 'filesystem',
+  persistent: hasBlobStorage(),
+  configured: hasBlobStorage(),
+  accessMode: hasBlobStorage() ? getPreferredBlobAccessMode() : 'filesystem',
+});
+
+const readFilesystemDataStore = async (tenantId: string): Promise<PersistedData> => {
+  const candidateTenantIds = [tenantId, ...getTenantAliasIds(tenantId)];
+
+  for (const candidateTenantId of candidateTenantIds) {
+    try {
+      const raw = await fs.readFile(getDataFilePath(candidateTenantId), 'utf-8');
+      return JSON.parse(raw) as PersistedData;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  return {};
+};
+
+const writeFilesystemDataStore = async (tenantId: string, data: PersistedData) => {
+  await fs.mkdir(DATA_DIRECTORY_PATH, { recursive: true });
+  await fs.writeFile(getDataFilePath(tenantId), JSON.stringify(data), 'utf-8');
+};
+
+const blobAccessModes: BlobAccessType[] = [getPreferredBlobAccessMode(), PRIVATE_BLOB_ACCESS_MODE, PUBLIC_BLOB_ACCESS_MODE]
+  .filter((mode, index, list) => list.indexOf(mode) === index);
+
+const readBlobDataStore = async (tenantId: string): Promise<PersistedData> => {
+  const candidateTenantIds = [tenantId, ...getTenantAliasIds(tenantId)];
+
+  for (const candidateTenantId of candidateTenantIds) {
+    for (const accessMode of blobAccessModes) {
+      const result = await get(getBlobPath(candidateTenantId), { access: accessMode });
+      if (!result || result.statusCode !== 200 || !result.stream) continue;
+
+      const raw = await new Response(result.stream).text();
+      return JSON.parse(raw) as PersistedData;
+    }
+  }
+
+  return {};
+};
 
 const readDataStore = async (tenantId: string): Promise<PersistedData> => {
-  try {
-    const raw = await fs.readFile(getDataFilePath(tenantId), 'utf-8');
-    return JSON.parse(raw) as PersistedData;
-  } catch {
-    return {};
+  if (hasBlobStorage()) {
+    const blobData = await readBlobDataStore(tenantId);
+    if (Object.keys(blobData).length > 0) {
+      return blobData;
+    }
   }
+
+  return readFilesystemDataStore(tenantId);
 };
 
 const writeDataStore = async (tenantId: string, data: PersistedData) => {
-  await fs.mkdir(DATA_DIRECTORY_PATH, { recursive: true });
-  await fs.writeFile(getDataFilePath(tenantId), JSON.stringify(data), 'utf-8');
+  if (hasBlobStorage()) {
+    let lastError: unknown = null;
+
+    for (const accessMode of blobAccessModes) {
+      try {
+        await put(getBlobPath(tenantId), JSON.stringify(data), {
+          access: accessMode,
+          addRandomSuffix: false,
+          allowOverwrite: true,
+          contentType: 'application/json',
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Failed to write blob data');
+  }
+
+  await writeFilesystemDataStore(tenantId, data);
 };
 
 const getAdminApiToken = (tenantId: string) =>
@@ -126,6 +205,7 @@ export default async function handler(
       tenantId,
       data: dataStore,
       lastUpdated: dataStore.lastUpdated || null,
+      storage: getStorageStatus(),
     });
   }
 
@@ -150,6 +230,14 @@ export default async function handler(
         });
       }
 
+      if (!hasBlobStorage() && isVercelRuntime()) {
+        return res.status(503).json({
+          success: false,
+          error: 'Persistent storage is not configured. Connect Vercel Blob and set BLOB_READ_WRITE_TOKEN.',
+          storage: getStorageStatus(),
+        });
+      }
+
       const dataStore: PersistedData = {
         categories,
         items,
@@ -165,12 +253,15 @@ export default async function handler(
         tenantId,
         message: 'Data saved successfully',
         lastUpdated: dataStore.lastUpdated,
+        storage: getStorageStatus(),
       });
     } catch (error) {
       console.error('Error saving data:', error);
       return res.status(500).json({
         success: false,
         error: 'Failed to save data',
+        details: error instanceof Error ? error.message : String(error),
+        storage: getStorageStatus(),
       });
     }
   }

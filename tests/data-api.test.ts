@@ -13,7 +13,7 @@ type MockResponse = {
 };
 
 const dataDirectoryPath = '/tmp/minas-data';
-const dataFilePath = `${dataDirectoryPath}/fogao-a-lenha.json`;
+const dataFilePath = `${dataDirectoryPath}/sabor-caseiro.json`;
 
 const createMockResponse = (): MockResponse => {
   const response: MockResponse = {
@@ -49,7 +49,7 @@ describe('api/data handler', () => {
     process.env.ADMIN_API_TOKEN = 'segredo';
     const req = {
       method: 'POST',
-      headers: { 'x-tenant-id': 'fogao-a-lenha' },
+      headers: { 'x-tenant-id': 'sabor-caseiro' },
       body: { categories: [], items: [], settings: {} },
     };
     const res = createMockResponse();
@@ -62,7 +62,7 @@ describe('api/data handler', () => {
   it('salva e retorna dados com sucesso', async () => {
     const saveReq = {
       method: 'POST',
-      headers: { 'x-tenant-id': 'fogao-a-lenha' },
+      headers: { 'x-tenant-id': 'sabor-caseiro' },
       body: { categories: [{ id: 'c1' }], items: [{ id: 'i1' }], settings: { name: 'Minas' } },
     };
     const saveRes = createMockResponse();
@@ -70,17 +70,42 @@ describe('api/data handler', () => {
     expect(saveRes.statusCode).toBe(200);
     await expect(fs.readFile(dataFilePath, 'utf-8')).resolves.toContain('"name":"Minas"');
 
-    const getReq = { method: 'GET', headers: { 'x-tenant-id': 'fogao-a-lenha' } };
+    const getReq = { method: 'GET', headers: { 'x-tenant-id': 'sabor-caseiro' } };
     const getRes = createMockResponse();
     await handler(getReq as never, getRes as never);
 
     expect(getRes.statusCode).toBe(200);
     expect(getRes.body).toMatchObject({
       success: true,
+      tenantId: 'sabor-caseiro',
       data: {
         categories: [{ id: 'c1' }],
         items: [{ id: 'i1' }],
         settings: { name: 'Minas' },
+      },
+    });
+  });
+
+  it('resolve alias antigo para o tenant canonico', async () => {
+    const saveReq = {
+      method: 'POST',
+      headers: { 'x-tenant-id': 'fogao-a-lenha' },
+      body: { categories: [{ id: 'c1' }], items: [{ id: 'i1' }], settings: { name: 'Granatto' } },
+    };
+    const saveRes = createMockResponse();
+    await handler(saveReq as never, saveRes as never);
+
+    expect(saveRes.statusCode).toBe(200);
+    await expect(fs.readFile(dataFilePath, 'utf-8')).resolves.toContain('"name":"Granatto"');
+
+    const getRes = createMockResponse();
+    await handler({ method: 'GET', headers: { 'x-tenant-id': 'fogao-a-lenha' } } as never, getRes as never);
+
+    expect(getRes.body).toMatchObject({
+      success: true,
+      tenantId: 'sabor-caseiro',
+      data: {
+        settings: { name: 'Granatto' },
       },
     });
   });

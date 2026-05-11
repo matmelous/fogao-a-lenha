@@ -2,6 +2,7 @@ export type TenantConfig = {
   id: string;
   name: string;
   domains: string[];
+  aliases?: string[];
   mode?: 'production' | 'lab';
   experimentalPayments?: string[];
 };
@@ -16,14 +17,15 @@ const normalizeHost = (value: string) =>
 
 export const tenantConfigs: TenantConfig[] = [
   {
-    id: 'fogao-a-lenha',
-    name: 'Sabor Caseiro',
+    id: 'sabor-caseiro',
+    name: 'Granatto',
     domains: ['localhost', '127.0.0.1', 'saborcaseiro.vercel.app'],
+    aliases: ['fogao-a-lenha'],
     mode: 'production',
   },
   {
     id: 'saborcaseiro-lab',
-    name: 'Sabor Caseiro Lab',
+    name: 'Granatto Lab',
     domains: ['saborcaseiro-lab.vercel.app', 'teste-saborcaseiro.vercel.app'],
     mode: 'lab',
     experimentalPayments: ['Apple Pay (Teste)', 'Google Pay (Teste)', 'Aproximação no Celular (Teste)'],
@@ -55,8 +57,13 @@ export const sanitizeTenantId = (value: string | null | undefined) =>
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
 
-export const findTenantConfigById = (tenantId: string) =>
-  tenantConfigs.find((tenant) => tenant.id === sanitizeTenantId(tenantId));
+export const findTenantConfigById = (tenantId: string) => {
+  const normalizedTenantId = sanitizeTenantId(tenantId);
+  return tenantConfigs.find((tenant) =>
+    tenant.id === normalizedTenantId ||
+    tenant.aliases?.some((alias) => sanitizeTenantId(alias) === normalizedTenantId),
+  );
+};
 
 export const findTenantConfigByHost = (hostname: string) => {
   const normalizedHost = normalizeHost(hostname);
@@ -71,7 +78,8 @@ export const resolveTenantId = (options: {
 }) => {
   const explicitTenantId = sanitizeTenantId(options.explicitTenantId);
   if (explicitTenantId) {
-    return explicitTenantId;
+    const explicitTenant = findTenantConfigById(explicitTenantId);
+    return explicitTenant?.id ?? explicitTenantId;
   }
 
   if (options.hostname) {
@@ -82,6 +90,12 @@ export const resolveTenantId = (options: {
   }
 
   return DEFAULT_TENANT_ID;
+};
+
+export const getTenantAliasIds = (tenantId: string) => {
+  const tenant = findTenantConfigById(tenantId);
+  if (!tenant?.aliases?.length) return [];
+  return tenant.aliases.map((alias) => sanitizeTenantId(alias)).filter(Boolean);
 };
 
 export const buildTenantStorageKey = (tenantId: string, suffix: string) =>

@@ -1,18 +1,25 @@
 {
   "name": "minas",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:android": "npm run build && npx cap sync android",
+    "cap:sync": "npx cap sync",
+    "cap:android": "npx cap open android",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1",
     "@tailwindcss/vite": "^4.2.1",
+    "@vercel/blob": "^2.3.3",
     "@vercel/node": "^3.2.29",
     "framer-motion": "^12.34.5",
     "lucide-react": "^0.576.0",

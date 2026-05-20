@@ -1845,7 +1845,7 @@ function App() {
     await persistOrder(newOrder, 'new_order', {
       fallbackMessage: buildOrderWhatsappMessage(newOrder, 'PIX - aguardando confirmaÃ§Ã£o'),
       openWhatsappFallback: false,
-      failureAlertMessage: 'Seu pedido foi enviado. Agora confirme seu pagamento compartilhando o comprovante para o numero: 42 991417956',
+      failureAlertMessage: 'Seu pedido foi enviado. Agora confirme seu pagamento compartilhando o comprovante para o numero: 42 998751800',
     });
   };
 

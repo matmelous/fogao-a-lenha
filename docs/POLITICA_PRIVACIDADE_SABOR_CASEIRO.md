@@ -88,6 +88,6 @@ Recomendamos revisao regular deste documento.
 Para duvidas, solicitacoes ou assuntos relacionados a privacidade e dados pessoais, utilize os canais oficiais do `Sabor Caseiro`:
 
 - Email: `saborcaseiro.pg@proton.me`
-- Telefone ou WhatsApp: `+55 42 99162-8586`
+- Telefone ou WhatsApp: `+55 42 99875-1800`
 - Endereco: `Avenida Atlanta, 830 - Jardim Atlanta - Carambei - PR`
 - CNPJ: `59.818.728/0001-78`

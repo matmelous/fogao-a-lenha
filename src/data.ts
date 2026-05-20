@@ -234,8 +234,8 @@ export const initialSettings: RestaurantSettings = {
     featureThree: 'Entrega com dados completos',
     whatsappTooltip: 'Peca pelo WhatsApp',
   },
-  phone: '(42) 99162-8586',
-  whatsapp: '(42) 99162-8586',
+  phone: '(42) 99875-1800',
+  whatsapp: '(42) 99875-1800',
   address: 'Avenida Atlanta, 830 - Jardim Atlanta - Carambei - PR',
   openingHours: {
     'Segunda a Sexta': '11:00 as 22:00',

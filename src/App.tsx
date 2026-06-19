@@ -115,84 +115,6 @@ function App() {
     ? import.meta.env.VITE_APP_PUBLIC_URL
     : 'https://saborcaseiro.vercel.app').trim().replace(/\/$/, '');
 
-  // Version check for updates
-  useEffect(() => {
-    const APP_VERSION = '2.1.0';
-    const VERSION_KEY = tenantStorageKeys.version;
-    const BUILD_TIME_KEY = tenantStorageKeys.buildTime;
-    
-    const checkForUpdates = async () => {
-      try {
-        // Get current version and build time from localStorage
-        const storedVersion = localStorage.getItem(VERSION_KEY);
-        const storedBuildTime = localStorage.getItem(BUILD_TIME_KEY);
-        
-        // Fetch the main HTML file with cache busting to check for new build
-        const timestamp = Date.now();
-        const response = await fetch(`/?v=${timestamp}`, { 
-          method: 'GET',
-          cache: 'no-store',
-          headers: {
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-          }
-        });
-        
-        if (response.ok) {
-          const html = await response.text();
-          
-          // Try to extract build hash from script tags or use timestamp
-          // Vite typically includes hash in asset filenames
-          const scriptMatch = html.match(/src="\/assets\/index-([^"]+)\.js"/);
-          const cssMatch = html.match(/href="\/assets\/index-([^"]+)\.css"/);
-          const currentBuildHash = scriptMatch?.[1] || cssMatch?.[1] || timestamp.toString();
-          
-          // Compare with stored build hash
-          if (storedBuildTime !== currentBuildHash || storedVersion !== APP_VERSION) {
-            console.log('ðŸ”„ New version detected!', { 
-              storedVersion, 
-              newVersion: APP_VERSION,
-              storedBuildTime,
-              currentBuildHash
-            });
-            setShowUpdateBanner(true);
-            localStorage.setItem(VERSION_KEY, APP_VERSION);
-            localStorage.setItem(BUILD_TIME_KEY, currentBuildHash);
-          }
-        }
-      } catch (error) {
-        console.error('Error checking for updates:', error);
-        // If fetch fails, it might be offline - don't show update banner
-      }
-    };
-    
-    // Check immediately on load
-    const timeout = setTimeout(checkForUpdates, 2000); // Wait 2s after page load
-    
-    // Check every 3 minutes
-    const interval = setInterval(checkForUpdates, 3 * 60 * 1000);
-    
-    // Also check when page becomes visible (user comes back to tab)
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        setTimeout(checkForUpdates, 1000);
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    // Check on focus (when user switches back to tab)
-    const handleFocus = () => {
-      setTimeout(checkForUpdates, 1000);
-    };
-    window.addEventListener('focus', handleFocus);
-    
-    return () => {
-      clearTimeout(timeout);
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, []);
   // Clean old localStorage keys and check storage usage
   useEffect(() => {
     try {
@@ -284,7 +206,6 @@ function App() {
   );
   const [isInitialized, setIsInitialized] = useState(false);
   const [lastSyncStatus, setLastSyncStatus] = useState<{ success: boolean; time: string | null; error?: string }>({ success: false, time: null });
-  const [showUpdateBanner, setShowUpdateBanner] = useState(false);
   const [incomingOrderAlert, setIncomingOrderAlert] = useState<Order | null>(null);
   const latestOrderSignatureRef = useRef<string | null>(null);
   const orderAlarmTimeoutsRef = useRef<number[]>([]);
@@ -2769,40 +2690,6 @@ function App() {
 
   return (
     <div className="min-h-screen font-sans bg-orange-50 text-stone-900 selection:bg-orange-200 selection:text-orange-900">
-      {/* Update Banner */}
-      {!isNativeApp && showUpdateBanner && (
-        <div className="fixed top-0 left-0 right-0 z-[9999] bg-orange-600 text-white px-4 py-3 sm:py-4 flex items-center justify-between gap-4 shadow-lg">
-          <div className="flex items-center gap-3 flex-1">
-            <div className="flex-shrink-0">
-              <RefreshCw size={20} className="sm:w-6 sm:h-6 animate-spin" />
-            </div>
-            <div className="flex-1">
-              <p className="font-black text-xs sm:text-sm uppercase tracking-widest">Nova versÃ£o disponÃ­vel!</p>
-              <p className="text-[10px] sm:text-xs opacity-90 mt-0.5">Toque para atualizar e obter as Ãºltimas melhorias</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                setShowUpdateBanner(false);
-                // Force reload with cache bypass
-                window.location.reload();
-              }}
-              className="px-4 sm:px-6 py-2 bg-white text-orange-600 font-black text-[10px] sm:text-xs uppercase tracking-widest rounded-lg sm:rounded-xl hover:bg-orange-50 active:scale-95 transition-all"
-              style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-            >
-              Atualizar
-            </button>
-            <button
-              onClick={() => setShowUpdateBanner(false)}
-              className="p-2 text-white/80 hover:text-white active:scale-95 transition-all"
-              style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-            >
-              <X size={18} className="sm:w-5 sm:h-5" />
-            </button>
-          </div>
-        </div>
-      )}
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md shadow-sm border-b border-orange-100">
         <div className="container mx-auto px-3 sm:px-6 md:px-8 h-20 sm:h-24 flex items-center justify-between gap-3 py-3 sm:py-3">
@@ -2844,7 +2731,6 @@ function App() {
 
           <div className="hidden md:flex items-center gap-8">
             <a href="#menu" className="text-stone-600 hover:text-orange-700 font-bold text-sm uppercase tracking-widest transition-colors">Cardapio</a>
-            <a href="#about" className="text-stone-600 hover:text-orange-700 font-bold text-sm uppercase tracking-widest transition-colors">Sobre</a>
             <a href="#contact" className="text-stone-600 hover:text-orange-700 font-bold text-sm uppercase tracking-widest transition-colors">Contato</a>
           </div>
 
@@ -3288,67 +3174,6 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* About Section */}
-      {!showMenuFirstMobile && (
-      <section id="about" className="py-16 sm:py-24 md:py-32 bg-stone-900 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-1/3 h-full bg-orange-700/5 rotate-12 translate-x-1/2" />
-        <div className="container mx-auto px-3 sm:px-4 grid md:grid-cols-2 gap-12 sm:gap-16 md:gap-24 items-center relative z-10">
-          <div>
-            <span className="text-orange-400 font-black tracking-[0.3em] uppercase text-[10px] sm:text-xs mb-4 sm:mb-6 block">{storefrontText.aboutBadge}</span>
-            <h3 className="text-3xl sm:text-4xl md:text-5xl lg:text-7xl font-black text-white mb-6 sm:mb-8 tracking-tighter leading-[0.9]">{storefrontText.aboutTitle}</h3>
-            <p className="text-stone-400 text-base sm:text-lg md:text-xl leading-relaxed mb-8 sm:mb-10 md:mb-12 font-medium">
-              {storefrontText.aboutSubtitle}
-            </p>
-            <div className="hidden sm:grid grid-cols-2 gap-3 sm:gap-6 md:gap-10 items-start">
-              <div className="p-3 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10 min-h-[132px] sm:min-h-0 flex flex-col justify-start">
-                <span className="block text-[28px] leading-none sm:text-3xl md:text-4xl font-black text-orange-400 mb-2 sm:mb-2">+comodidade</span>
-                <span className="text-stone-500 font-bold uppercase tracking-[0.18em] text-[9px] leading-7 sm:text-xs sm:tracking-widest sm:leading-normal">Cardapio, pedido e entrega</span>
-              </div>
-              <div className="p-3 sm:p-6 md:p-8 bg-white/5 rounded-xl sm:rounded-2xl border border-white/10 min-h-[132px] sm:min-h-0 flex flex-col justify-start">
-                <span className="block text-[28px] leading-none sm:text-3xl md:text-4xl font-black text-orange-400 mb-2 sm:mb-2">+ rapido</span>
-                <span className="text-stone-500 font-bold uppercase tracking-[0.18em] text-[9px] leading-7 sm:text-xs sm:tracking-widest sm:leading-normal">Atendimento com menos atrito</span>
-              </div>
-            </div>
-          </div>
-          <div className="relative group mt-2 sm:mt-8 md:mt-0">
-            <div className="absolute -inset-4 bg-orange-700/20 blur-[100px] rounded-full group-hover:bg-orange-700/30 transition-all duration-700" />
-            <div className="grid grid-cols-2 gap-3 sm:gap-4 md:gap-6 relative">
-              <img
-                key={`about-1-${(settings.aboutImage1 || heroForegroundImage).substring(0, 30)}`}
-                src={settings.aboutImage1 || heroForegroundImage}
-                className="rounded-2xl sm:rounded-3xl h-[200px] sm:h-[300px] md:h-[400px] lg:h-[450px] w-full object-cover shadow-2xl rotate-3"
-                alt="Marca Granatto"
-                loading="lazy"
-              />
-              <div className="mt-3 sm:mt-8 md:mt-12 rounded-2xl sm:rounded-3xl h-[220px] sm:h-[300px] md:h-[400px] lg:h-[450px] w-full bg-gradient-to-br from-orange-500 via-orange-700 to-stone-900 text-white shadow-2xl -rotate-3 p-4 sm:p-8 flex flex-col justify-start md:justify-between overflow-hidden">
-                <div>
-                  <p className="text-[10px] sm:text-xs font-black uppercase tracking-[0.3em] text-orange-100/80">Experiencia</p>
-                  <h4 className="mt-2 text-xl sm:text-3xl font-black tracking-tight">{storefrontText.experienceTitle}</h4>
-                  <p className="mt-2 text-xs sm:text-base text-orange-50/85 leading-relaxed">
-                    {storefrontText.experienceSubtitle}
-                  </p>
-                </div>
-                <div className="-mt-1 space-y-1.5 text-[11px] sm:text-sm font-bold md:mt-0 md:space-y-3">
-                  <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-1.5 backdrop-blur-sm sm:gap-3 sm:px-4 sm:py-3">
-                    <CheckCircle size={16} />
-                    <span>{storefrontText.featureOne}</span>
-                  </div>
-                  <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-1.5 backdrop-blur-sm sm:gap-3 sm:px-4 sm:py-3">
-                    <CreditCard size={16} />
-                    <span>{storefrontText.featureTwo}</span>
-                  </div>
-                  <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-1.5 backdrop-blur-sm sm:gap-3 sm:px-4 sm:py-3">
-                    <Truck size={16} />
-                    <span>{storefrontText.featureThree || 'Entrega com dados completos'}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-      )}
 
       {/* Contact Section */}
       <section id="contact" className="py-12 sm:py-20 md:py-32 bg-white">
@@ -6704,7 +6529,6 @@ function App() {
 }
 
 export default App;
-
 
 
 
